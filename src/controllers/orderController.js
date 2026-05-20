@@ -1,4 +1,3 @@
-const jwt = require("jsonwebtoken");
 const { UserOrder, Nalco } = require("../models/Order");
 const nodemailer = require("nodemailer");
 const fs = require("fs");

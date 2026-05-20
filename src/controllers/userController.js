@@ -1,4 +1,3 @@
-const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const {
   S3Client,
@@ -14,10 +13,8 @@ const Category = require('../models/Profiles/Category');
 const Size = require('../models/Profiles/Size');
 const { Nalco } = require('../models/Order');
 const { AUTH_COOKIE_MAX_AGE_MS, extractAuthToken, setAuthCookie } = require('../utils/authCookies');
+const { signJwt, verifyJwt } = require('../utils/jwt');
 require('dotenv').config();
-
-// Secret for JWT (you should store this in your .env file)
-const JWT_SECRET = process.env.JWT_SECRET || 'your_secret_key'; // Replace with a more secure secret
 
 const normalizePhoneNumbers = (phoneNumbers, phoneNumber) => {
   const rawNumbers = [];
@@ -252,9 +249,8 @@ const createUser = async (req, res) => {
     await newUser.save();
 
     // Generate a JWT token for the new user
-    const token = jwt.sign(
+    const token = signJwt(
       { userId: newUser._id, phoneNumber: primaryPhoneNumber, role: 'user' }, // Include relevant data like userId and role
-      JWT_SECRET,
       { expiresIn: '120d' }
     );
 
@@ -281,7 +277,7 @@ const getUser = async (req, res) => {
 
   try {
     // Verify the JWT token
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = verifyJwt(token);
 
     // Extract userId from the token payload
     const userId = decoded.userId;
@@ -321,7 +317,7 @@ const updateUser = async (req, res) => {
 
   try {
     // Verify and decode the JWT
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = verifyJwt(token);
 
     // Find the user by ID from the token
     const user = await User.findById(decoded.userId);

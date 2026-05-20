@@ -2,10 +2,10 @@ const twilio = require('twilio');
 const Otp = require('../models/Otp');
 const axios = require('axios');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const TrackPhone = require('../models/TrackPhone');
 const { AUTH_COOKIE_MAX_AGE_MS, clearAuthCookie, setAuthCookie } = require('../utils/authCookies');
+const { signJwt } = require('../utils/jwt');
 require('dotenv').config();
 
 const otpStore = {};
@@ -105,7 +105,7 @@ const sendWhatsAppOTP = async (req, res) => {
   console.log("otp", otp);
 
   try {
-    sendLoginOtp(otp, phoneNumber);
+    // sendLoginOtp(otp, phoneNumber);
 
     await Otp.findOneAndUpdate(
       { phone: phoneNumber },
@@ -133,9 +133,8 @@ const verifyOTP = async (req, res) => {
       });
 
       if (existingUser) {
-        const token = jwt.sign(
+        const token = signJwt(
           { phoneNumber, userId: existingUser._id, role: 'user' },
-          process.env.JWT_SECRET || 'secret',
           { expiresIn: '120d' }
         );
 
@@ -178,8 +177,7 @@ const adminLogin = async (req, res) => {
     }
 
     // Create JWT token with role as 'admin'
-    console.log("debugge", process.env.JWT_SECRET)
-    const token = jwt.sign({ username, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '120d' });
+    const token = signJwt({ username, role: 'admin' }, { expiresIn: '120d' });
 
     // Send token as response
     res.status(200).json({ message: 'Login successful', token });
