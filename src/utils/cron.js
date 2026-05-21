@@ -7,6 +7,7 @@ require('dotenv').config();
 
 const META_TOKEN=process.env.META_TOKEN;
 const META_NUMID=process.env.META_NUMID;
+const CRON_TIMEZONE = "Asia/Kolkata";
 
 const sendNalcoMessageToUsers = async (nalcoPrice) => {
   try {
@@ -92,9 +93,6 @@ const updateNalcoPrice = async (nalcoPrice) => {
       todayEnd = new Date(now.setHours(23, 59, 59, 999) - istOffset);
     }
 
-    
-    sendNalcoMessageToUsers(nalcoPrice);
-
     // Find the latest entry for today
     const existingEntry = await Nalco.findOne({
       date: { $gte: todayStart, $lte: todayEnd },
@@ -148,6 +146,19 @@ const updateNalcoPrice = async (nalcoPrice) => {
   }
 };
 
+const shouldSendDailyWhatsappUpdate = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-IN", {
+    timeZone: CRON_TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+
+  return hour === 10 && minute === 0;
+};
+
 
 
 const runJob = async () => {
@@ -160,6 +171,9 @@ const runJob = async () => {
     const res = await updateNalcoPrice(price);
     if (res) {
       console.log("Database updated successfully via service");
+      if (shouldSendDailyWhatsappUpdate()) {
+        await sendNalcoMessageToUsers(price);
+      }
     } else {
       console.log("Failed to save new price");
     }
@@ -168,7 +182,7 @@ const runJob = async () => {
 };
 // runJob();
 
-cron.schedule("0 10 * * *", runJob, {
-  timezone: "Asia/Kolkata",
+cron.schedule("*/15 * * * *", runJob, {
+  timezone: CRON_TIMEZONE,
 });
-console.log("Cron job scheduled");
+console.log("Cron job scheduled every 15 minutes");
