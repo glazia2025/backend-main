@@ -9,6 +9,21 @@ const { cleanupStalePdfTempDirs } = require("./pdfBrowser");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+const removeTempPath = (targetPath) => {
+  if (!targetPath) return;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+      return;
+    } catch (error) {
+      if (attempt === 2) {
+        console.warn(`Failed to clean temp path ${targetPath}:`, error.message);
+      }
+    }
+  }
+};
+
 const parsePdf = async (filePath) => {
   try {
     const dataBuffer = fs.readFileSync(filePath);
@@ -82,7 +97,7 @@ const downloadPdf = async () => {
       return await parsePdf(pdfPath);
     } finally {
       if (fs.existsSync(pdfPath)) {
-        fs.unlinkSync(pdfPath);
+        removeTempPath(pdfPath);
         console.log("Temporary PDF file deleted");
       }
     }
@@ -99,11 +114,12 @@ const downloadPdf = async () => {
     await sleep(1000);
 
     try {
-      fs.rmSync(userDataDir, { recursive: true, force: true });
+      removeTempPath(userDataDir);
       console.log("Temporary Chrome profile deleted");
     } catch (err) {
       console.warn("Failed to clean Chrome profile:", err.message);
     }
+    cleanupStalePdfTempDirs();
   }
 };
 
