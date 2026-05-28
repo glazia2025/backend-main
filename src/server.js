@@ -9,6 +9,7 @@ const connectDB = require("./db");
 
 const app = express();
 const PORT = process.env.PORT || 5555;
+const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || "50mb";
 
 const defaultAllowedOrigins = [
   "https://glazia.in",
@@ -43,7 +44,7 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ extended: false, limit: "10mb" }));
+app.use(express.json({ extended: false, limit: JSON_BODY_LIMIT }));
 
 connectDB();
 
@@ -63,6 +64,14 @@ app.get("/", (req, res) => {
 
 app.get("/health", (req, res) => {
   res.json({ service: "backend-main", ok: true });
+});
+
+app.use((error, req, res, next) => {
+  if (error?.type === "entity.too.large") {
+    return res.status(413).json({ message: "Request body is too large" });
+  }
+
+  return next(error);
 });
 
 app.listen(PORT, "0.0.0.0", () => {
