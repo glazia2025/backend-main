@@ -19,6 +19,9 @@ router.post("/product", master.createProduct);
 router.get("/products", master.getProducts);
 router.put("/product/:id", master.updateProduct);
 
+// GENERIC DELETE API
+router.delete("/delete", master.deleteMaster);
+
 // MASTER STRUCTURED DATA
 router.get("/full", master.getFullMasterData);
 

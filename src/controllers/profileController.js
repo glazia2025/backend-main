@@ -259,6 +259,78 @@ exports.updateProduct = async (req, res) => {
   }
 };
 
+exports.deleteMaster = async (req, res) => {
+  try {
+    const { module, type, id, sapCode } = req.query;
+
+    if (!module || !type) {
+      return res.status(400).json({
+        success: false,
+        message: "module and type are required",
+      });
+    }
+
+    if (module === "profile") {
+      switch (type) {
+
+        case "product": {
+
+          let product = null;
+
+          if (id) {
+            product = await Product.findByIdAndDelete(id);
+
+            if (product) {
+              await SizeProduct.deleteMany({
+                productId: product._id,
+              });
+            }
+          } else if (sapCode) {
+
+            product = await Product.findOneAndDelete({
+              sapCode,
+            });
+
+            if (product) {
+              await SizeProduct.deleteMany({
+                productId: product._id,
+              });
+            }
+          }
+
+          if (!product) {
+            return res.status(404).json({
+              success: false,
+              message: "Product not found",
+            });
+          }
+
+          break;
+        }
+
+        default:
+          return res.status(400).json({
+            success: false,
+            message: "Invalid type",
+          });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: "Deleted Successfully",
+    });
+
+  } catch (error) {
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+
+  }
+};
+
 
 /* =====================================================
    MASTER API: FULL DATA STRUCTURE
