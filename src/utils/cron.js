@@ -1,74 +1,10 @@
 const cron = require("node-cron");
-const fs = require("fs");
 const { Nalco } = require("../models/Order");
-const User = require('../models/User');
 const { downloadPdf } = require("./nalcoPriceFetch");
+const { sendNalcoMessageToUsers } = require("./nalcoWhatsapp");
 require('dotenv').config();
 
-const META_TOKEN=process.env.META_TOKEN;
-const META_NUMID=process.env.META_NUMID;
 const CRON_TIMEZONE = "Asia/Kolkata";
-
-const sendNalcoMessageToUsers = async (nalcoPrice) => {
-  try {
-    // Logic to send message to users
-    console.log("Sending Nalco price to users:", nalcoPrice);
-    const users = await User.find();
-    console.log(`Found ${users.length} users to notify`);
-    for(const user of users) {
-      const targetNumber = user.phoneNumber || (user.phoneNumbers && user.phoneNumbers[0]);
-      if (targetNumber) {
-          const axios = require('axios');
-          let data = JSON.stringify({
-            "messaging_product": "whatsapp",
-            "to": `91${targetNumber}`,
-            "type": "template",
-            "template": {
-              "name": "daily_update",
-              "language": {
-                "code": "en"
-              },
-              "components": [
-                {
-                  "type": "body",
-                  "parameters": [
-                    {
-                      "type": "text",
-                      "text": nalcoPrice/1000
-                    }
-                  ]
-                }
-              ]
-            }
-          });
-
-          let config = {
-            method: 'post',
-            maxBodyLength: Infinity,
-            url: `https://graph.facebook.com/v22.0/${META_NUMID}/messages`,
-            headers: { 
-              'Authorization': `Bearer ${META_TOKEN}`, 
-              'Content-Type': 'application/json'
-            },
-            data : data
-          };
-
-          axios.request(config)
-          .then((response) => {
-            console.log(JSON.stringify(response.data));
-          })
-          .catch((error) => {
-            console.log(error);
-          });
-
-      }
-    }
-    
-  } catch (error) {
-    console.error('Error sending SMS message:', error);
-  }
-}
-
 
 const updateNalcoPrice = async (nalcoPrice) => {
   try {
@@ -114,6 +50,8 @@ const updateNalcoPrice = async (nalcoPrice) => {
       return {
         message: "Nalco created for today.",
         nalco: savedNalco,
+        changed: false,
+        direction: null,
       };
     } else {
       console.log("Existing entry found, checking price...");
@@ -122,6 +60,7 @@ const updateNalcoPrice = async (nalcoPrice) => {
       console.log("New price:", nalcoPrice);
       console.log("Price comparison:", existingEntry.nalcoPrice !== nalcoPrice);
       if (existingEntry.nalcoPrice !== nalcoPrice) {
+        const previousPrice = existingEntry.nalcoPrice;
         const newNalco = new Nalco({
           nalcoPrice,
           date: new Date(),
@@ -132,11 +71,16 @@ const updateNalcoPrice = async (nalcoPrice) => {
         return {
           message: "Nalco updated (new price for today).",
           nalco: savedNalco,
+          changed: true,
+          direction: nalcoPrice > previousPrice ? "increase" : "decrease",
+          previousPrice,
         };
       } else {
         return {
           message: "Nalco price unchanged. No update needed.",
           nalco: existingEntry,
+          changed: false,
+          direction: null,
         };
       }
     }
@@ -171,8 +115,17 @@ const runJob = async () => {
     const res = await updateNalcoPrice(price);
     if (res) {
       console.log("Database updated successfully via service");
-      if (shouldSendDailyWhatsappUpdate()) {
-        await sendNalcoMessageToUsers(price);
+      if (res.changed || shouldSendDailyWhatsappUpdate()) {
+        console.log(
+          res.changed
+            ? `Nalco ${res.direction} detected; sending WhatsApp update`
+            : "Sending scheduled 10:00 AM Nalco WhatsApp update"
+        );
+        try {
+          await sendNalcoMessageToUsers(price);
+        } catch (error) {
+          console.error("Failed to send Nalco WhatsApp update:", error.message);
+        }
       }
     } else {
       console.log("Failed to save new price");

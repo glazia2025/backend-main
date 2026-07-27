@@ -2,6 +2,7 @@ const { UserOrder, Nalco } = require("../models/Order");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
 const { extractQueryParams, escapeRegExp } = require("../utils/common");
+const { sendNalcoMessageToUsers } = require("../utils/nalcoWhatsapp");
 
 const createOrder = async (req, res) => {
   const { user, products, payment, totalAmount, deliveryType } = req.body;
@@ -352,14 +353,14 @@ const completeOrder = async (req, res) => {
 };
 
 const updateNalco = async (req, res) => {
-  const { nalcoPrice } = req.body;
+  const nalcoPrice = Number(req.body.nalcoPrice);
 
-  if (!nalcoPrice) {
+  if (!Number.isFinite(nalcoPrice) || nalcoPrice <= 0) {
     return res.status(400).json({ message: "Please enter price" });
   }
 
   try {
-    const nalco = await Nalco.findOne({});
+    const nalco = await Nalco.findOne({}).sort({ date: -1 });
 
     if (!nalco) {
       const newNalco = new Nalco({
@@ -374,14 +375,39 @@ const updateNalco = async (req, res) => {
         nalco: savedNalco,
       });
     } else {
-      nalco.nalcoPrice = nalcoPrice;
-      nalco.date = new Date();
+      if (nalco.nalcoPrice === nalcoPrice) {
+        return res.status(200).json({
+          message: "Nalco price unchanged.",
+          nalco,
+          notification: { sent: false, reason: "unchanged" },
+        });
+      }
 
-      const updatedNalco = await nalco.save();
+      const previousPrice = nalco.nalcoPrice;
+      const updatedNalco = await Nalco.create({
+        nalcoPrice,
+        date: new Date(),
+      });
+      let notification;
+      try {
+        notification = {
+          sent: true,
+          direction: nalcoPrice > previousPrice ? "increase" : "decrease",
+          ...(await sendNalcoMessageToUsers(nalcoPrice)),
+        };
+      } catch (notificationError) {
+        console.error("Failed to send Nalco WhatsApp update:", notificationError);
+        notification = {
+          sent: false,
+          direction: nalcoPrice > previousPrice ? "increase" : "decrease",
+          error: notificationError.message,
+        };
+      }
 
       return res.status(200).json({
         message: "Nalco updated successfully.",
         nalco: updatedNalco,
+        notification,
       });
     }
   } catch (error) {
