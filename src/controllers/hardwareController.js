@@ -5,21 +5,51 @@ const HardwareOptions = require('../models/Hardware'); // single product per doc
 // Add a single product document
 const addHardware = async (req, res) => {
   const { option, product } = req.body;
-  if (!option || !product) {
+  const category = typeof option === 'string' ? option.trim() : '';
+
+  if (!category || !product || typeof product !== 'object' || Array.isArray(product)) {
     return res.status(400).json({ message: 'option and product are required' });
   }
 
   try {
-    // ensure product has subCategory (consistent field)
+    const requiredFields = ['sapCode', 'perticular', 'rate', 'system', 'moq'];
+    const missingFields = requiredFields.filter(field => (
+      product[field] === undefined ||
+      product[field] === null ||
+      String(product[field]).trim() === ''
+    ));
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        message: `Missing mandatory fields: ${missingFields.join(', ')}`
+      });
+    }
+
+    const rate = Number(product.rate);
+    if (!Number.isFinite(rate) || rate < 0) {
+      return res.status(400).json({ message: 'rate must be a non-negative number' });
+    }
+
+    // Always use the selected category instead of trusting a subCategory sent
+    // inside the item payload.
     const productDoc = {
-      ...product,
-      subCategory: option
+      id: Number.isFinite(Number(product.id)) ? Number(product.id) : Date.now(),
+      sapCode: String(product.sapCode).trim(),
+      perticular: String(product.perticular).trim(),
+      subCategory: category,
+      rate,
+      system: String(product.system).trim(),
+      moq: String(product.moq).trim(),
+      ...(product.image ? { image: product.image } : {})
     };
 
     const created = await HardwareOptions.create(productDoc);
     res.status(201).json({ message: 'Product created', product: created });
   } catch (err) {
     console.error('Error creating product:', err);
+    if (err.name === 'ValidationError' || err.name === 'CastError') {
+      return res.status(400).json({ message: err.message });
+    }
     res.status(500).json({ message: 'Error creating product', error: err.message });
   }
 };
