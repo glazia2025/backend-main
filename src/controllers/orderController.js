@@ -1,13 +1,13 @@
 const { UserOrder, Nalco } = require("../models/Order");
+const User = require("../models/User");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
 const { extractQueryParams, escapeRegExp } = require("../utils/common");
 const { sendNalcoMessageToUsers } = require("../utils/nalcoWhatsapp");
 
 const createOrder = async (req, res) => {
-  const { user, products, payment, totalAmount, deliveryType } = req.body;
+  const { products, payment, totalAmount, deliveryType } = req.body;
   if (
-    !user ||
     !products ||
     !Array.isArray(products) ||
     products.length === 0 ||
@@ -22,8 +22,32 @@ const createOrder = async (req, res) => {
   }
 
   try {
+    const authenticatedUser = req.user?.userId
+      ? await User.findById(req.user.userId).lean()
+      : req.user?.phoneNumber
+        ? await User.findOne({
+            $or: [
+              { phoneNumber: req.user.phoneNumber },
+              { phoneNumbers: req.user.phoneNumber },
+            ],
+          }).lean()
+        : null;
+
+    if (!authenticatedUser) {
+      return res.status(400).json({
+        message: "Authenticated user profile could not be found. Please log in again.",
+      });
+    }
+
+    const orderUser = {
+      userId: authenticatedUser._id,
+      name: authenticatedUser.name,
+      city: authenticatedUser.city,
+      phoneNumber: authenticatedUser.phoneNumber,
+    };
+
     const newOrder = new UserOrder({
-      user,
+      user: orderUser,
       products,
       payments: [
         {
