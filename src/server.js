@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const blogRoutes = require("./routes/blogRoutes");
 
 require("dotenv").config({ path: path.resolve(__dirname, "../prod.env") });
 require("./utils/cron");
@@ -19,6 +20,7 @@ const defaultAllowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3001",
   "https://splendid-begonia-cbc292.netlify.app",
+  "https://hoppscotch.io"
 ];
 
 const allowedOrigins = new Set(
@@ -57,7 +59,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/profile", profileRoutes);
-
+app.use("/api/blogs", blogRoutes);
 app.get("/", (req, res) => {
   res.send("Glazia main backend is running");
 });
