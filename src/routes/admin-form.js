@@ -20,6 +20,10 @@ const {
   deleteHardware,
   searchHardware,
   saveProductImage,
+  listHardwareCategories,
+  createHardwareCategory,
+  updateHardwareCategory,
+  deleteHardwareCategory,
 } = require("../controllers/hardwareController");
 const { updateNalco, approvePayment, completeOrder, updatePaymentDueDate } = require("../controllers/orderController");
 const { getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers } = require("../controllers/userController");
@@ -30,6 +34,10 @@ const router = express.Router();
 router.post("/add-product", isAdmin, addProduct);
 router.post("/add-hardware", isAdmin, addHardware);
 router.get("/getHardwares", getHardwares);
+router.get("/hardware-categories", isAdmin, listHardwareCategories);
+router.post("/hardware-categories", isAdmin, createHardwareCategory);
+router.put("/hardware-categories/:id", isAdmin, updateHardwareCategory);
+router.delete("/hardware-categories/:id", isAdmin, deleteHardwareCategory);
 router.post("/add-all", isAdmin, addAllProducts);
 router.get("/search-product", isUser, searchProduct);
 router.get("/search-hardware", isUser, searchHardware);
