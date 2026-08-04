@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "build": "npm run check",
     "check": "node --check src/server.js",
     "test": "node --test src/utils/*.test.js"
   },
@@ -21,7 +22,6 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "firebase-admin": "^14.2.0",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.12.0",
     "mongoose": "^8.5.1",

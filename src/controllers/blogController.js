@@ -1,12 +1,22 @@
-const db = require("../config/firebaseAdmin");
+const Blog = require("../models/Blog");
+
+const getBlogData = (body) => ({
+  title: body.title,
+  slug: body.slug,
+  category: body.category,
+  image: body.image || "",
+  date: body.date,
+  readTime: body.readTime,
+  views: Number(body.views || 0),
+  likes: Number(body.likes || 0),
+  comments: Number(body.comments || 0),
+  share: Number(body.share || 0),
+  content: body.content,
+});
+
 const getBlogs = async (req, res) => {
   try {
-    const snapshot = await db.collection("blogs").get();
-
-    const blogs = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
+    const blogs = await Blog.find().sort({ createdAt: -1 });
 
     return res.status(200).json(blogs);
   } catch (error) {
@@ -50,41 +60,34 @@ const createBlog = async (req, res) => {
     }
 
     // Check duplicate slug
-    const existingBlog = await db
-      .collection("blogs")
-      .where("slug", "==", slug)
-      .limit(1)
-      .get();
+    const existingBlog = await Blog.exists({ slug });
 
-    if (!existingBlog.empty) {
+    if (existingBlog) {
       return res.status(400).json({
         message: "Blog with this slug already exists",
       });
     }
 
-    const blogData = {
-      title,
-      slug,
-      category,
-      image: image || "",
-      date,
-      readTime,
-      views: Number(views || 0),
-      likes: Number(likes || 0),
-      comments: Number(comments || 0),
-      share: Number(share || 0),
-      content,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    const docRef = await db.collection("blogs").add(blogData);
+    const blog = await Blog.create(
+      getBlogData({
+        title,
+        slug,
+        category,
+        image,
+        date,
+        readTime,
+        views,
+        likes,
+        comments,
+        share,
+        content,
+      })
+    );
 
     return res.status(201).json({
       success: true,
       message: "Blog created successfully",
-      id: docRef.id,
-       ...blogData,
+      ...blog.toJSON(),
     });
   } catch (error) {
     console.error(error);
@@ -100,22 +103,9 @@ const updateBlog = async (req, res) => {
   try {
     const { id } = req.params;
 
-    console.log("========== UPDATE BLOG ==========");
-    console.log("PARAM ID:", id);
+    const blog = await Blog.findById(id);
 
-    const blogRef = db.collection("blogs").doc(id);
-
-    const blogDoc = await blogRef.get();
-
-    console.log("BLOG EXISTS:", blogDoc.exists);
-
-    const allDocs = await db.collection("blogs").get();
-
-    console.log("ALL DOC IDS:");
-    allDocs.forEach((doc) => console.log(doc.id));
-
-    // Check if blog exists
-    if (!blogDoc.exists) {
+    if (!blog) {
       return res.status(404).json({
         success: false,
         message: "Blog not found",
@@ -137,12 +127,7 @@ const updateBlog = async (req, res) => {
     } = req.body;
 
     // Check duplicate slug (ignore current blog)
-    const existing = await db
-      .collection("blogs")
-      .where("slug", "==", slug)
-      .get();
-
-    const duplicate = existing.docs.find((doc) => doc.id !== id);
+    const duplicate = await Blog.exists({ slug, _id: { $ne: id } });
 
     if (duplicate) {
       return res.status(400).json({
@@ -151,22 +136,23 @@ const updateBlog = async (req, res) => {
       });
     }
 
-    const updatedBlog = {
-      title,
-      slug,
-      category,
-      image: image || "",
-      date,
-      readTime,
-      views: Number(views || 0),
-      likes: Number(likes || 0),
-      comments: Number(comments || 0),
-      share: Number(share || 0),
-      content,
-      updatedAt: new Date(),
-    };
-
-    await blogRef.update(updatedBlog);
+    Object.assign(
+      blog,
+      getBlogData({
+        title,
+        slug,
+        category,
+        image,
+        date,
+        readTime,
+        views,
+        likes,
+        comments,
+        share,
+        content,
+      })
+    );
+    await blog.save();
 
     return res.status(200).json({
       success: true,
@@ -185,19 +171,14 @@ const deleteBlog = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const blogRef = db.collection("blogs").doc(id);
+    const blog = await Blog.findByIdAndDelete(id);
 
-    const blogDoc = await blogRef.get();
-
-    // Check if blog exists
-    if (!blogDoc.exists) {
+    if (!blog) {
       return res.status(404).json({
         success: false,
         message: "Blog not found",
       });
     }
-
-    await blogRef.delete();
 
     return res.status(200).json({
       success: true,
@@ -217,11 +198,9 @@ const getBlogById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const blogRef = db.collection("blogs").doc(id);
+    const blog = await Blog.findById(id);
 
-    const blogDoc = await blogRef.get();
-
-    if (!blogDoc.exists) {
+    if (!blog) {
       return res.status(404).json({
         success: false,
         message: "Blog not found",
@@ -230,10 +209,7 @@ const getBlogById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: {
-        id: blogDoc.id,
-        ...blogDoc.data(),
-      },
+      data: blog,
     });
   } catch (error) {
     console.error("GET BLOG BY ID ERROR:", error);
