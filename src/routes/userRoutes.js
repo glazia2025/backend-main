@@ -7,6 +7,7 @@ const { createOrder, getOrders, sendEmail, createPayment, uploadPaymentProof } =
 const { getHardwareHeirarchy } = require('../controllers/hardwareController');
 const isUser = require('../middleware/userMiddleware');
 const { trackPhone } = require('../controllers/authcontroller');
+const { shareQuotationOnWhatsApp } = require('../controllers/quotationShareController');
 const router = express.Router();
 
 const PA_PDF_MAX_SIZE_MB = Number(process.env.PA_PDF_MAX_SIZE_MB || 50);
@@ -23,6 +24,15 @@ const upload = multer({
   },
 });
 
+const quotationPdfUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype !== 'application/pdf') return cb(new Error('Only PDF files are allowed'));
+    return cb(null, true);
+  },
+});
+
 router.post('/register', upload.single('paPdf'), createUser);
 router.get('/getUser', isUser, getUser);
 router.put('/updateUser', isUser, updateUser);
@@ -33,6 +43,7 @@ router.get('/get-profile-heirarchy', isUser, getProfileHierarchy);
 router.get('/get-hardware-heirarchy', isUser, getHardwareHeirarchy);
 router.get('/global-search', globalSearch);
 router.post('/send-email', isUser, sendEmail);
+router.post('/share-quotation', isUser, quotationPdfUpload.single('quotationPdf'), shareQuotationOnWhatsApp);
 router.post('/upload-payment-proof', express.json({ limit: "50mb" }), uploadPaymentProof)
 router.get('/getProducts', getProducts);
 router.post('/track-phone', trackPhone);
@@ -40,7 +51,9 @@ router.post('/track-phone', trackPhone);
 router.use((error, req, res, next) => {
   if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({
-      message: `Partner agreement PDF must be ${PA_PDF_MAX_SIZE_MB}MB or smaller`,
+      message: req.path.includes('share-quotation')
+        ? 'Quotation PDF must be 25MB or smaller'
+        : `Partner agreement PDF must be ${PA_PDF_MAX_SIZE_MB}MB or smaller`,
     });
   }
 
