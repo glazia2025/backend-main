@@ -58,6 +58,38 @@ const userOrderSchema = new mongoose.Schema(
       enum: ['SELF', 'FULL', 'PART'],
       required: true,
     },
+    dealership: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
+    fulfillment: {
+      status: {
+        type: String,
+        enum: ["GLAZIA_DIRECT", "AWAITING_DEALER", "DEALER_STOCK", "GLAZIA_VIA_DEALER"],
+        default: "GLAZIA_DIRECT",
+      },
+      decidedAt: { type: Date, default: null },
+      decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+      notes: { type: String, default: "" },
+    },
+    orderChannel: {
+      type: String,
+      enum: ["CUSTOMER", "DEALER_DIRECT_FULFILLMENT"],
+      default: "CUSTOMER",
+    },
+    inventoryDisposition: {
+      type: String,
+      enum: ["NONE", "ADD_TO_DEALER_STOCK", "DIRECT_TO_FABRICATOR", "CONSUMED_FROM_DEALER_STOCK"],
+      default: "NONE",
+    },
+    inventoryProcessedAt: { type: Date, default: null },
+    sourceOrder: { type: mongoose.Schema.Types.ObjectId, ref: "UserOrder", default: null },
+    upstreamOrder: { type: mongoose.Schema.Types.ObjectId, ref: "UserOrder", default: null },
+    deliveryAddress: {
+      name: { type: String },
+      phoneNumber: { type: String },
+      address: { type: String },
+      city: { type: String },
+      state: { type: String },
+      pincode: { type: String },
+    },
   },
   { timestamps: true }
 );

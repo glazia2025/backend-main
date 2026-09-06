@@ -8,7 +8,8 @@
     "dev": "nodemon src/server.js",
     "build": "npm run check",
     "check": "node --check src/server.js",
-    "test": "node --test src/utils/*.test.js"
+    "test": "node --test src/utils/*.test.js",
+    "admin:bootstrap": "node scripts/bootstrap-admin.js"
   },
   "keywords": [],
   "author": "",

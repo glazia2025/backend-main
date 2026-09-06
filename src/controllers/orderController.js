@@ -4,6 +4,7 @@ const nodemailer = require("nodemailer");
 const fs = require("fs");
 const { extractQueryParams, escapeRegExp } = require("../utils/common");
 const { sendNalcoMessageToUsers } = require("../utils/nalcoWhatsapp");
+const { consumeStock, addStock } = require("../services/dealershipInventoryService");
 
 const createOrder = async (req, res) => {
   const { products, payment, totalAmount, deliveryType } = req.body;
@@ -14,7 +15,8 @@ const createOrder = async (req, res) => {
     !payment ||
     !payment.amount ||
     !payment.proof ||
-    !totalAmount
+    !totalAmount ||
+    products.some((product) => !product.productId || !Number.isFinite(Number(product.quantity)) || Number(product.quantity) <= 0)
   ) {
     return res
       .status(400)
@@ -46,6 +48,8 @@ const createOrder = async (req, res) => {
       phoneNumber: authenticatedUser.phoneNumber,
     };
 
+    const isDealership = authenticatedUser.accountType === "DEALERSHIP";
+    const assignedDealership = authenticatedUser.dealership || (isDealership ? authenticatedUser._id : null);
     const newOrder = new UserOrder({
       user: orderUser,
       products,
@@ -59,9 +63,65 @@ const createOrder = async (req, res) => {
         },
       ],
       totalAmount,
-      deliveryType
+      deliveryType,
+      dealership: assignedDealership,
+      fulfillment: {
+        status: authenticatedUser.dealership ? "AWAITING_DEALER" : "GLAZIA_DIRECT",
+      },
+      inventoryDisposition: isDealership ? "ADD_TO_DEALER_STOCK" : "NONE",
+      deliveryAddress: {
+        name: authenticatedUser.name,
+        phoneNumber: authenticatedUser.phoneNumber,
+        address: authenticatedUser.address,
+        city: authenticatedUser.city,
+        state: authenticatedUser.state,
+        pincode: authenticatedUser.pincode,
+      },
     });
     const savedOrder = await newOrder.save();
+
+    if (authenticatedUser.dealership) {
+      const fulfilledFromStock = await consumeStock(authenticatedUser.dealership, products, savedOrder._id);
+      if (fulfilledFromStock) {
+        savedOrder.fulfillment.status = "DEALER_STOCK";
+        savedOrder.fulfillment.decidedAt = new Date();
+        savedOrder.fulfillment.decidedBy = authenticatedUser.dealership;
+        savedOrder.inventoryDisposition = "CONSUMED_FROM_DEALER_STOCK";
+      } else {
+        const dealership = await User.findById(authenticatedUser.dealership).lean();
+        if (!dealership) throw new Error("Assigned dealership could not be found");
+        const upstreamOrder = await UserOrder.create({
+          user: {
+            userId: dealership._id,
+            name: dealership.name,
+            city: dealership.city,
+            phoneNumber: dealership.phoneNumber,
+          },
+          products,
+          payments: [],
+          totalAmount,
+          deliveryType,
+          dealership: dealership._id,
+          fulfillment: { status: "GLAZIA_DIRECT" },
+          orderChannel: "DEALER_DIRECT_FULFILLMENT",
+          inventoryDisposition: "DIRECT_TO_FABRICATOR",
+          sourceOrder: savedOrder._id,
+          deliveryAddress: {
+            name: authenticatedUser.name,
+            phoneNumber: authenticatedUser.phoneNumber,
+            address: authenticatedUser.address,
+            city: authenticatedUser.city,
+            state: authenticatedUser.state,
+            pincode: authenticatedUser.pincode,
+          },
+        });
+        savedOrder.fulfillment.status = "GLAZIA_VIA_DEALER";
+        savedOrder.fulfillment.decidedAt = new Date();
+        savedOrder.fulfillment.decidedBy = dealership._id;
+        savedOrder.upstreamOrder = upstreamOrder._id;
+      }
+      await savedOrder.save();
+    }
 
     res.status(201).json({
       message: "Order created successfully.",
@@ -168,6 +228,10 @@ const createPayment = async (req, res) => {
       return res.status(400).json({
         message: "Order cannot be found.",
       });
+    }
+
+    if (order.isComplete) {
+      return res.status(409).json({ message: "Order is already completed." });
     }
 
     const latestPayment = order.payments[order.payments.length - 1];
@@ -354,6 +418,10 @@ const completeOrder = async (req, res) => {
       });
     }
 
+    if (order.isComplete) {
+      return res.status(409).json({ message: "Order is already completed." });
+    }
+
     order.biltyDoc = biltyDoc;
     order.eWayBill = eWayBill;
     order.driverInfo = {
@@ -362,7 +430,13 @@ const completeOrder = async (req, res) => {
     };
     order.taxInvoice = taxInvoice;
     order.isComplete = true;
+    order.completedAt = new Date();
     order.updatedAt = new Date();
+
+    if (order.inventoryDisposition === "ADD_TO_DEALER_STOCK" && !order.inventoryProcessedAt) {
+      await addStock(order.dealership || order.user.userId, order.products, order._id);
+      order.inventoryProcessedAt = new Date();
+    }
 
     const updatedOrder = await order.save();
 

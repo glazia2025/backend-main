@@ -164,6 +164,19 @@ const deleteExistingPaFiles = async (bucket, prefix) => {
   } while (continuationToken);
 };
 
+const uploadPartnerAgreement = async (file, phoneNumber) => {
+  if (!file) return null;
+  const bucket = process.env.AWS_S3_BUCKET;
+  const region = process.env.AWS_REGION;
+  if (!bucket || !region) throw new Error('S3 is not configured');
+  const ext = path.extname(file.originalname || '').toLowerCase() || '.pdf';
+  const objectPrefix = `${phoneNumber}/`;
+  await deleteExistingPaFiles(bucket, objectPrefix);
+  const objectKey = `${objectPrefix}${crypto.randomUUID()}${ext}`;
+  await s3Client.send(new PutObjectCommand({ Bucket: bucket, Key: objectKey, Body: file.buffer, ContentType: file.mimetype || 'application/pdf', ACL: 'public-read' }));
+  return buildS3PublicUrl(bucket, region, objectKey);
+};
+
 // API to store user data when they log in with mobile number
 const createUser = async (req, res) => {
   const {
@@ -198,28 +211,7 @@ const createUser = async (req, res) => {
 
     let paUrl;
     if (req.file) {
-      const bucket = process.env.AWS_S3_BUCKET;
-      const region = process.env.AWS_REGION;
-      if (!bucket || !region) {
-        return res.status(500).json({ message: 'S3 is not configured' });
-      }
-
-      const ext = path.extname(req.file.originalname || '').toLowerCase() || '.pdf';
-      const objectPrefix = `${primaryPhoneNumber}/`;
-      await deleteExistingPaFiles(bucket, objectPrefix);
-
-      const objectKey = `${objectPrefix}${crypto.randomUUID()}${ext}`;
-      await s3Client.send(
-        new PutObjectCommand({
-          Bucket: bucket,
-          Key: objectKey,
-          Body: req.file.buffer,
-          ContentType: req.file.mimetype || 'application/pdf',
-          ACL: 'public-read'
-        })
-      );
-
-      paUrl = buildS3PublicUrl(bucket, region, objectKey);
+      paUrl = await uploadPartnerAgreement(req.file, primaryPhoneNumber);
     }
 
     const { hardwareLabels, profileLabels } = await getDynamicPricingLabels();
@@ -243,6 +235,13 @@ const createUser = async (req, res) => {
       authorizedPersonDesignation,
       paUrl,
       dynamicPricing,
+      accountType: 'FABRICATOR',
+      partnerAgreement: {
+        type: 'GLAZIA_FABRICATOR',
+        accepted: true,
+        acceptedAt: new Date(),
+        version: process.env.PARTNER_AGREEMENT_VERSION || '1.0',
+      },
     });
 
     // Save the new user
@@ -513,16 +512,21 @@ const getDynamicPricing = async (req, res) => {
 // List all users for admin with basic details and dynamic pricing summary
 const listUsers = async (req, res) => {
   try {
-    const users = await User.find({}, {
+    const users = await User.find({ accountType: { $ne: 'ADMIN' } }, {
       name: 1,
       email: 1,
       phoneNumber: 1,
       phoneNumbers: 1,
       city: 1,
       state: 1,
+      pincode: 1,
+      address: 1,
       gstNumber: 1,
       dynamicPricing: 1,
       createdAt: 1,
+      accountType: 1,
+      dealership: 1,
+      partnerAgreement: 1,
     }).sort({ name: 1 });
 
     res.status(200).json({ users });
@@ -599,4 +603,4 @@ const sendContactMail = async (firstName, lastName, email, phoneNumber, company,
 };
 
 
-module.exports = { createUser, getUser, updateUser, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail };
+module.exports = { createUser, getUser, updateUser, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement };

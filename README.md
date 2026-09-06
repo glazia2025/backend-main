@@ -18,4 +18,8 @@ cp .env.example prod.env
 npm start
 ```
 
+In local development (`NODE_ENV` other than `production`), login OTPs are
+printed to the backend terminal as `[DEV OTP] <phone>: <otp>` and are not sent
+through WhatsApp. Production requires `META_TOKEN` and `META_NUMID`.
+
 Use the same production `JWT_SECRET` in `backend-quotation/prod.env`.

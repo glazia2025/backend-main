@@ -1,5 +1,6 @@
 const { extractAuthToken } = require('../utils/authCookies');
 const { verifyJwt } = require('../utils/jwt');
+const User = require('../models/User');
 require('dotenv').config();
 
 const isUser = (req, res, next) => {
@@ -27,6 +28,18 @@ const isUser = (req, res, next) => {
   } catch (err) {
     return res.status(400).json({ message: 'Invalid token!' });
   }
+};
+
+isUser.withAdminPermission = (permission) => (req, res, next) => {
+  isUser(req, res, () => {
+    if (req.user.role !== 'admin') return next();
+    return User.findOne({ _id: req.user.userId, accountType: 'ADMIN', isActive: { $ne: false } }).select('adminPermissions').lean().then(admin => {
+      const permissions = admin?.adminPermissions || [];
+      if (!admin || (!permissions.includes('*') && !permissions.includes(permission))) return res.status(403).json({ message: `Access denied. ${permission} permission is required.` });
+      req.user.permissions = permissions;
+      return next();
+    }).catch(() => res.status(500).json({ message: 'Unable to verify admin access.' }));
+  });
 };
 
 module.exports = isUser;

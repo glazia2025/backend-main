@@ -1,8 +1,9 @@
 const { extractAuthToken } = require('../utils/authCookies');
 const { verifyJwt } = require('../utils/jwt');
+const User = require('../models/User');
 require('dotenv').config();
 
-const isAdmin = (req, res, next) => {
+const isAdmin = async (req, res, next) => {
   const token = extractAuthToken(req);
 
   if (!token) {
@@ -18,11 +19,24 @@ const isAdmin = (req, res, next) => {
       return res.status(403).json({ message: 'Access denied, admin only!' });
     }
 
-    req.user = decoded; // Attach user info to request
+    const admin = decoded.userId ? await User.findOne({ _id: decoded.userId, accountType: 'ADMIN', isActive: { $ne: false } }).select('adminPermissions name phoneNumber') : null;
+    if (!admin) return res.status(403).json({ message: 'Admin account is disabled or no longer exists.' });
+    req.user = { ...decoded, permissions: admin.adminPermissions || [] };
+    req.adminAccount = admin;
     next(); // Proceed to next route handler
   } catch (err) {
     return res.status(400).json({ message: 'Invalid token!' });
   }
+};
+
+isAdmin.withPermission = (permission) => (req, res, next) => {
+  isAdmin(req, res, () => {
+    const permissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
+    if (!permissions.includes('*') && !permissions.includes(permission)) {
+      return res.status(403).json({ message: `Access denied. ${permission} permission is required.` });
+    }
+    return next();
+  });
 };
 
 module.exports = isAdmin;

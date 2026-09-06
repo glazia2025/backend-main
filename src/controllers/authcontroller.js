@@ -1,43 +1,28 @@
 const twilio = require('twilio');
 const Otp = require('../models/Otp');
 const axios = require('axios');
-const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const TrackPhone = require('../models/TrackPhone');
 const { AUTH_COOKIE_MAX_AGE_MS, clearAuthCookie, setAuthCookie } = require('../utils/authCookies');
 const { signJwt } = require('../utils/jwt');
 require('dotenv').config();
 
-const otpStore = {};
-
 const META_TOKEN = process.env.META_TOKEN;
 const META_NUMID = process.env.META_NUMID;
-
-const staticAdmin = {
-  username: 'admin',
-  password: ''
-};
-
-const password = 'admin123';
-
-// Hash the password asynchronously
-bcrypt.hash(password, 10, (err, hashedPassword) => {
-  if (err) {
-    console.error('Error hashing password:', err);
-  } else {
-    // Now that the password is hashed, create the staticAdmin object
-
-    staticAdmin.password = hashedPassword;
-  }
-});
 
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 
 const sendLoginOtp = async (otp, number) => {
-  try {
-    // Logic to send message to users
-    console.log("Sending Otp to user:", otp, number);
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[DEV OTP] ${number}: ${otp}`);
+    return;
+  }
+  if (!META_TOKEN || !META_NUMID) {
+    const error = new Error('WhatsApp OTP service is not configured on the server.');
+    error.code = 'OTP_PROVIDER_NOT_CONFIGURED';
+    throw error;
+  }
     let data = JSON.stringify({
       "messaging_product": "whatsapp",
       "to": `91${number}`,
@@ -83,29 +68,24 @@ const sendLoginOtp = async (otp, number) => {
       data: data
     };
 
-    axios.request(config)
-      .then((response) => {
-        console.log(JSON.stringify(response.data));
-      })
-      .catch((error) => {
-        console.log(error);
-      });
-
-  } catch (error) {
-    console.error('Error sending SMS message:', error.data.error);
-  }
+    try {
+      await axios.request(config);
+    } catch (providerError) {
+      const error = new Error(providerError.response?.data?.error?.message || 'WhatsApp rejected the OTP delivery request.');
+      error.code = 'OTP_DELIVERY_FAILED';
+      throw error;
+    }
 }
 
 
 const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
 const sendWhatsAppOTP = async (req, res) => {
-  const { phoneNumber } = req.body;
+  const phoneNumber = String(req.body.phoneNumber || '').trim();
+  if (!/^\d{10}$/.test(phoneNumber)) return res.status(400).json({ message: 'Enter a valid 10-digit Indian mobile number.' });
   const otp = generateOtp();
 
-  console.log("otp", otp);
-
   try {
-    sendLoginOtp(otp, phoneNumber);
+    await sendLoginOtp(otp, phoneNumber);
 
     await Otp.findOneAndUpdate(
       { phone: phoneNumber },
@@ -116,8 +96,60 @@ const sendWhatsAppOTP = async (req, res) => {
     return res.status(200).json({ message: 'OTP sent successfully' });
   } catch (error) {
     console.error('Error sending OTP:', error);
-    return res.status(500).json({ message: 'Failed to send OTP' });
+    const status = error.code === 'OTP_DELIVERY_FAILED' ? 502 : 503;
+    return res.status(status).json({ message: error.message || 'OTP service is temporarily unavailable. Please try again later.', code: error.code || 'OTP_SEND_FAILED' });
   }
+};
+
+const sendAdminOtp = async (req, res) => {
+  const phoneNumber = String(req.body.phoneNumber || '').trim();
+  if (!/^\d{10}$/.test(phoneNumber)) return res.status(400).json({ message: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE_NUMBER' });
+  try {
+    const account = await User.findOne({ $or: [{ phoneNumber }, { phoneNumbers: phoneNumber }] }).select('accountType isActive');
+    if (!account) return res.status(404).json({ message: 'This mobile number is not registered. Ask a full-access administrator to create an admin account for it.', code: 'ADMIN_NOT_FOUND' });
+    if (account.accountType !== 'ADMIN') return res.status(403).json({ message: `This number belongs to a ${account.accountType.toLowerCase()} account and cannot sign in to the admin portal. Use a separate admin account number.`, code: 'NOT_AN_ADMIN' });
+    if (account.isActive === false) return res.status(403).json({ message: 'This admin account is disabled. Contact a full-access administrator.', code: 'ADMIN_DISABLED' });
+    const otp = generateOtp();
+    await sendLoginOtp(otp, phoneNumber);
+    await Otp.findOneAndUpdate({ phone: phoneNumber }, { otp, createdAt: new Date() }, { upsert: true });
+    return res.json({ message: 'OTP sent successfully' });
+  } catch (error) {
+    console.error('Admin OTP send failed:', error.message);
+    const status = error.code === 'OTP_DELIVERY_FAILED' ? 502 : error.code === 'OTP_PROVIDER_NOT_CONFIGURED' ? 503 : 500;
+    return res.status(status).json({ message: error.message || 'The OTP could not be sent because of a server error. Please try again.', code: error.code || 'OTP_SEND_FAILED' });
+  }
+};
+
+const verifyAdminOtp = async (req, res) => {
+  const phoneNumber = String(req.body.phoneNumber || '').trim();
+  const otp = String(req.body.otp || '').trim();
+  if (!/^\d{10}$/.test(phoneNumber)) return res.status(400).json({ message: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE_NUMBER' });
+  if (!/^\d{6}$/.test(otp)) return res.status(400).json({ message: 'Enter the complete 6-digit OTP.', code: 'INVALID_OTP_FORMAT' });
+  try {
+    const record = await Otp.findOne({ phone: phoneNumber, otp });
+    if (!record) return res.status(400).json({ message: 'The OTP is incorrect or has expired. Request a new OTP and try again.', code: 'INVALID_OR_EXPIRED_OTP' });
+    const admin = await User.findOne({ accountType: 'ADMIN', isActive: { $ne: false }, $or: [{ phoneNumber }, { phoneNumbers: phoneNumber }] });
+    if (!admin) return res.status(403).json({ message: 'This admin account is disabled or no longer exists. Contact a full-access administrator.', code: 'ADMIN_DISABLED' });
+    await Otp.deleteOne({ _id: record._id });
+    const permissions = admin.adminPermissions || [];
+    const token = signJwt({ userId: admin._id, phoneNumber, role: 'admin', permissions, name: admin.name }, { expiresIn: '12h' });
+    setAuthCookie(req, res, token, 12 * 60 * 60 * 1000);
+    return res.json({ message: 'OTP verified successfully', token, admin: { id: admin._id, name: admin.name, email: admin.email, permissions } });
+  } catch (error) {
+    console.error('Admin OTP verification failed:', error.message);
+    return res.status(500).json({ message: 'The OTP could not be verified because of a server error. Please try again.', code: 'OTP_VERIFY_FAILED' });
+  }
+};
+
+const getAdminSession = async (req, res) => {
+  return res.json({
+    admin: {
+      id: req.adminAccount._id,
+      name: req.adminAccount.name,
+      phoneNumber: req.adminAccount.phoneNumber,
+      permissions: req.adminAccount.adminPermissions || [],
+    },
+  });
 };
 
 const verifyOTP = async (req, res) => {
@@ -161,28 +193,6 @@ const verifyOTP = async (req, res) => {
   }
 };
 
-
-const adminLogin = async (req, res) => {
-  const { username, password } = req.body;
-
-  if (username !== staticAdmin.username) {
-    return res.status(400).json({ message: 'Invalid username' });
-  }
-
-  // Compare hashed password
-  bcrypt.compare(password, staticAdmin.password, (err, isMatch) => {
-    if (err || !isMatch) {
-      console.error('Error comparing passwords:', password);
-      return res.status(400).json({ message: 'Invalid password' });
-    }
-
-    // Create JWT token with role as 'admin'
-    const token = signJwt({ username, role: 'admin' }, { expiresIn: '120d' });
-
-    // Send token as response
-    res.status(200).json({ message: 'Login successful', token });
-  });
-};
 
 const trackPhone = async (req, res) => {
   const { phone, reason } = req.body;
@@ -261,7 +271,9 @@ const deleteLead = async (req, res) => {
 module.exports = {
   sendWhatsAppOTP,
   verifyOTP,
-  adminLogin,
+  sendAdminOtp,
+  verifyAdminOtp,
+  getAdminSession,
   logout: (req, res) => {
     clearAuthCookie(req, res);
     return res.status(200).json({ message: 'Logged out successfully' });

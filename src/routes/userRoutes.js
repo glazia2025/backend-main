@@ -38,7 +38,7 @@ router.get('/getUser', isUser, getUser);
 router.put('/updateUser', isUser, updateUser);
 router.post('/pi-generate', isUser, express.json({ limit: "50mb" }), createOrder);
 router.post('/add-payment', isUser, express.json({ limit: "50mb" }), createPayment);
-router.get('/getOrders', isUser, getOrders);
+router.get('/getOrders', isUser.withAdminPermission('ORDERS'), getOrders);
 router.get('/get-profile-heirarchy', isUser, getProfileHierarchy);
 router.get('/get-hardware-heirarchy', isUser, getHardwareHeirarchy);
 router.get('/global-search', globalSearch);
