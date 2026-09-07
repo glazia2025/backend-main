@@ -86,9 +86,9 @@ const secureEqual = (left, right) => {
   return crypto.timingSafeEqual(leftDigest, rightDigest);
 };
 
-const loginSuperAdmin = async (req, res) => {
-  const configuredEmail = getEnv('SUPER_ADMIN_EMAIL').toLowerCase();
-  const configuredPassword = getEnv('SUPER_ADMIN_PASSWORD');
+const loginSuperAdmin = (req, res) => {
+  const configuredEmail = String(process.env.SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
+  const configuredPassword = String(process.env.SUPER_ADMIN_PASSWORD || '').trim();
   if (!configuredEmail || !configuredPassword) {
     return res.status(503).json({ message: 'Super-admin login is not configured on the server.', code: 'SUPER_ADMIN_NOT_CONFIGURED' });
   }
@@ -101,7 +101,7 @@ const loginSuperAdmin = async (req, res) => {
   }
 
   const permissions = ['*'];
-  const name = getEnv('SUPER_ADMIN_NAME') || 'Super Admin';
+  const name = String(process.env.SUPER_ADMIN_NAME || '').trim() || 'Super Admin';
   const token = signJwt({ email, role: 'admin', permissions, name, superAdmin: true }, { expiresIn: '12h' });
   setAuthCookie(req, res, token, 12 * 60 * 60 * 1000);
   return res.json({ message: 'Super-admin login successful', token, admin: { name, email, permissions, superAdmin: true } });
