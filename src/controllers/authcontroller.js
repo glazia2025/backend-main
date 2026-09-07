@@ -1,4 +1,5 @@
 const twilio = require('twilio');
+const crypto = require('crypto');
 const Otp = require('../models/Otp');
 const axios = require('axios');
 const User = require('../models/User');
@@ -79,6 +80,32 @@ const sendLoginOtp = async (otp, number) => {
 
 
 const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
+const secureEqual = (left, right) => {
+  const leftDigest = crypto.createHash('sha256').update(String(left)).digest();
+  const rightDigest = crypto.createHash('sha256').update(String(right)).digest();
+  return crypto.timingSafeEqual(leftDigest, rightDigest);
+};
+
+const loginSuperAdmin = async (req, res) => {
+  const configuredEmail = getEnv('SUPER_ADMIN_EMAIL').toLowerCase();
+  const configuredPassword = getEnv('SUPER_ADMIN_PASSWORD');
+  if (!configuredEmail || !configuredPassword) {
+    return res.status(503).json({ message: 'Super-admin login is not configured on the server.', code: 'SUPER_ADMIN_NOT_CONFIGURED' });
+  }
+
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const password = String(req.body.password || '');
+  if (!email || !password) return res.status(400).json({ message: 'Email and password are required.', code: 'CREDENTIALS_REQUIRED' });
+  if (!secureEqual(email, configuredEmail) || !secureEqual(password, configuredPassword)) {
+    return res.status(401).json({ message: 'The super-admin email or password is incorrect.', code: 'INVALID_SUPER_ADMIN_CREDENTIALS' });
+  }
+
+  const permissions = ['*'];
+  const name = getEnv('SUPER_ADMIN_NAME') || 'Super Admin';
+  const token = signJwt({ email, role: 'admin', permissions, name, superAdmin: true }, { expiresIn: '12h' });
+  setAuthCookie(req, res, token, 12 * 60 * 60 * 1000);
+  return res.json({ message: 'Super-admin login successful', token, admin: { name, email, permissions, superAdmin: true } });
+};
 const sendWhatsAppOTP = async (req, res) => {
   const phoneNumber = String(req.body.phoneNumber || '').trim();
   if (!/^\d{10}$/.test(phoneNumber)) return res.status(400).json({ message: 'Enter a valid 10-digit Indian mobile number.' });
@@ -148,6 +175,7 @@ const getAdminSession = async (req, res) => {
       name: req.adminAccount.name,
       phoneNumber: req.adminAccount.phoneNumber,
       permissions: req.adminAccount.adminPermissions || [],
+      superAdmin: req.adminAccount.superAdmin === true,
     },
   });
 };
@@ -273,6 +301,7 @@ module.exports = {
   verifyOTP,
   sendAdminOtp,
   verifyAdminOtp,
+  loginSuperAdmin,
   getAdminSession,
   logout: (req, res) => {
     clearAuthCookie(req, res);

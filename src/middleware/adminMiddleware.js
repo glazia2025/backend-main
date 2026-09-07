@@ -19,6 +19,12 @@ const isAdmin = async (req, res, next) => {
       return res.status(403).json({ message: 'Access denied, admin only!' });
     }
 
+    if (decoded.superAdmin === true && decoded.email && decoded.email === String(process.env.SUPER_ADMIN_EMAIL || '').trim().toLowerCase()) {
+      req.user = { ...decoded, permissions: ['*'] };
+      req.adminAccount = { _id: null, name: decoded.name || 'Super Admin', email: decoded.email, phoneNumber: null, adminPermissions: ['*'], superAdmin: true };
+      return next();
+    }
+
     const admin = decoded.userId ? await User.findOne({ _id: decoded.userId, accountType: 'ADMIN', isActive: { $ne: false } }).select('adminPermissions name phoneNumber') : null;
     if (!admin) return res.status(403).json({ message: 'Admin account is disabled or no longer exists.' });
     req.user = { ...decoded, permissions: admin.adminPermissions || [] };

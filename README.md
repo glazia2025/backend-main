@@ -22,4 +22,9 @@ In local development (`NODE_ENV` other than `production`), login OTPs are
 printed to the backend terminal as `[DEV OTP] <phone>: <otp>` and are not sent
 through WhatsApp. Production requires `META_TOKEN` and `META_NUMID`.
 
+The admin portal also supports one environment-managed super admin. Configure
+`SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD` (and optionally
+`SUPER_ADMIN_NAME`). This credential receives unrestricted (`*`) admin access;
+database-managed administrator accounts continue to sign in by mobile OTP.
+
 Use the same production `JWT_SECRET` in `backend-quotation/prod.env`.
