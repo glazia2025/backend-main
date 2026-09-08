@@ -28,11 +28,11 @@ const createOrder = async (req, res) => {
       ? await User.findById(req.user.userId).lean()
       : req.user?.phoneNumber
         ? await User.findOne({
-            $or: [
-              { phoneNumber: req.user.phoneNumber },
-              { phoneNumbers: req.user.phoneNumber },
-            ],
-          }).lean()
+          $or: [
+            { phoneNumber: req.user.phoneNumber },
+            { phoneNumbers: req.user.phoneNumber },
+          ],
+        }).lean()
         : null;
 
     if (!authenticatedUser) {
@@ -194,16 +194,19 @@ const getOrders = async (req, res) => {
     }
 
 
-    const orders = await UserOrder.find(query, project)
-      .sort(sortObj)
-      .skip(skip)
-      .limit(limit);
+    const [orders, totalCount] = await Promise.all([
+      UserOrder.find(query, project)
+        .sort(sortObj)
+        .skip(skip)
+        .limit(limit),
+      UserOrder.countDocuments(query),
+    ]);
 
     if (!orders) {
       return res.status(404).json({ message: "No orders found" });
     }
 
-    res.status(200).json(orders);
+    res.status(200).json({ orders, totalCount });
   } catch (error) {
     console.error("Error fetching orders:", error);
     res.status(500).json({ message: "Error fetching orders" });
