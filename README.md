@@ -50,3 +50,9 @@ After verifying the worker is stopped and investigating the accepted requests,
 an operator can mark that record `failed` in MongoDB to unlock manual sending.
 Do not clear the lock while a worker may still be running. This is not a durable
 queue and does not resume interrupted broadcasts automatically.
+
+The **Pull latest rate & send** button posts `{ "pullLatest": true }` to the same
+endpoint. After acquiring the manual broadcast lock, it downloads and parses the
+NALCO PDF, saves a new rate observation, then sends that fetched rate. A fetch,
+validation, or database-save failure stops the operation without sending a
+stored fallback rate. The status panel shows fetching/sending progress.

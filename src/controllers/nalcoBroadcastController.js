@@ -1,11 +1,12 @@
 const mongoose = require('mongoose');
+const { downloadPdf } = require('../utils/nalcoPriceFetch');
 const { randomUUID } = require('crypto');
 const { Nalco } = require('../models/Order');
 const { sendNalcoMessageToUsers } = require('../utils/nalcoWhatsapp');
 
 const Broadcast = mongoose.model('NalcoBroadcast', new mongoose.Schema({
   _id: String, runId: String, state: String, startedAt: Date, finishedAt: Date,
-  nalcoPrice: Number, rateDate: Date, requestedBy: String,
+  nalcoPrice: Number, rateDate: Date, requestedBy: String, phase: String,
   recipients: Number, accepted: Number, failed: Number, message: String,
 }));
 
@@ -23,11 +24,12 @@ exports.getStatus = async (_req, res) => {
 
 exports.send = async (req, res) => {
   try {
-    const rate = await Nalco.findOne().sort({ date: -1, _id: -1 }).lean();
-    if (!rate || !Number.isFinite(rate.nalcoPrice) || rate.nalcoPrice <= 0) {
+    const pullLatest = req.body?.pullLatest === true;
+    let rate = pullLatest ? null : await Nalco.findOne().sort({ date: -1, _id: -1 }).lean();
+    if (!pullLatest && (!rate || !Number.isFinite(rate.nalcoPrice) || rate.nalcoPrice <= 0)) {
       return res.status(400).json({ message: 'No valid NALCO rate is available in the database.' });
     }
-    if (String(rate._id) !== req.body.rateId) {
+    if (!pullLatest && String(rate._id) !== req.body?.rateId) {
       return res.status(409).json({ message: 'The latest rate changed. Refresh and confirm the new rate.' });
     }
     if (!process.env.META_TOKEN || !process.env.META_NUMID) {
@@ -39,7 +41,8 @@ exports.send = async (req, res) => {
       broadcast = await Broadcast.findOneAndUpdate(
         { _id: 'manual', state: { $ne: 'running' } },
         { $set: { runId, state: 'running', startedAt: new Date(), finishedAt: null,
-          nalcoPrice: rate.nalcoPrice, rateDate: rate.date,
+          nalcoPrice: rate?.nalcoPrice || null, rateDate: rate?.date || null,
+          phase: pullLatest ? 'fetching' : 'sending',
           requestedBy: String(req.user.userId || req.user.email || 'admin'),
           recipients: 0, accepted: 0, failed: 0, message: '' } },
         { upsert: true, new: true }
@@ -51,7 +54,17 @@ exports.send = async (req, res) => {
     res.status(202).json({ broadcast });
     // Persist the result independently of the browser/proxy connection.
     setImmediate(async () => {
+      let sending = false;
       try {
+        if (pullLatest) {
+          const price = await downloadPdf();
+          if (!Number.isFinite(price) || price <= 0) throw new Error("Could not fetch a valid NALCO price");
+          rate = await Nalco.create({ nalcoPrice: price, date: new Date() });
+          await Broadcast.updateOne({ _id: 'manual', runId }, { $set: {
+            nalcoPrice: rate.nalcoPrice, rateDate: rate.date, phase: 'sending',
+          } });
+        }
+        sending = true;
         const result = await sendNalcoMessageToUsers(rate.nalcoPrice);
         await Broadcast.updateOne({ _id: 'manual', runId }, { $set: {
           state: 'completed', finishedAt: new Date(), recipients: result.recipients,
@@ -61,7 +74,9 @@ exports.send = async (req, res) => {
         console.error('Manual NALCO broadcast failed:', error.message);
         await Broadcast.updateOne({ _id: 'manual', runId }, { $set: {
           state: 'failed', finishedAt: new Date(),
-          message: 'Broadcast interrupted. Some requests may have been accepted; check server logs before sending again.',
+          message: sending
+            ? 'Broadcast interrupted. Some requests may have been accepted; check server logs before sending again.'
+            : 'Unable to fetch or save the latest NALCO rate. No messages were sent. Check server logs and retry.',
         } }).catch(() => console.error('Could not persist NALCO broadcast failure'));
       }
     });
