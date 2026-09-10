@@ -1,4 +1,5 @@
 const axios = require("axios");
+const { randomUUID } = require("crypto");
 const User = require("../models/User");
 
 const normalizeIndianPhoneNumber = (value) => {
@@ -30,6 +31,7 @@ const sendNalcoMessageToUsers = async (nalcoPrice) => {
     )
   );
 
+  const broadcastId = randomUUID();
   const results = [];
   const batchSize = 10;
   for (let index = 0; index < recipients.length; index += batchSize) {
@@ -63,20 +65,44 @@ const sendNalcoMessageToUsers = async (nalcoPrice) => {
         )
       )
     );
+    settled.forEach((result, offset) => {
+      const entry = {
+        timestamp: new Date().toISOString(),
+        broadcastId,
+        recipient: batch[offset],
+        template: "daily_update",
+        nalcoPrice: price,
+      };
+      if (result.status === "fulfilled") {
+        const response = result.value;
+        const message = response.data?.messages?.[0];
+        console.log("NALCO_WHATSAPP_RECIPIENT", JSON.stringify({
+          ...entry,
+          status: message?.message_status || "api_accepted",
+          httpStatus: response.status,
+          messageId: message?.id || null,
+        }));
+      } else {
+        const error = result.reason;
+        const metaError = error?.response?.data?.error;
+        console.error("NALCO_WHATSAPP_RECIPIENT", JSON.stringify({
+          ...entry,
+          status: error?.response ? "api_failed" : "request_outcome_unknown",
+          httpStatus: error?.response?.status || null,
+          errorCode: metaError?.code || error?.code || null,
+          errorSubcode: metaError?.error_subcode || null,
+          errorMessage: metaError?.message || error?.message || "Request failed",
+          errorDetails: metaError?.error_data?.details || null,
+          traceId: metaError?.fbtrace_id || null,
+        }));
+      }
+    });
     results.push(...settled);
   }
 
   const sent = results.filter((result) => result.status === "fulfilled").length;
   const failed = results.length - sent;
-  console.log(`Nalco WhatsApp update completed: ${sent} sent, ${failed} failed`);
-  results
-    .filter((result) => result.status === "rejected")
-    .forEach((result) =>
-      console.error(
-        "Nalco WhatsApp delivery failed:",
-        result.reason?.response?.data || result.reason?.message || result.reason
-      )
-    );
+  console.log(`Nalco WhatsApp update completed: ${sent} API requests accepted, ${failed} failed or unknown; broadcastId=${broadcastId}`);
 
   return { recipients: recipients.length, sent, failed };
 };
