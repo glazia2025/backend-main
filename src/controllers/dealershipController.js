@@ -188,6 +188,27 @@ const listOrders = async (req, res) => {
   }
 };
 
+const getOrder = async (req, res) => {
+  try {
+    const dealership = await getDealership(req, res);
+    if (!dealership) return;
+
+    const order = await UserOrder.findOne({
+      orderId: Number(req.params.orderId),
+      dealership: dealership._id,
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Dealership order not found' });
+    }
+
+    res.json({ order });
+  } catch (error) {
+    console.error('Error getting dealership order:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 const getInventory = async (req, res) => {
   try {
     const dealership = await getDealership(req, res);
@@ -300,4 +321,4 @@ const decideFulfillment = async (req, res) => {
   }
 };
 
-module.exports = { listFabricators, registerFabricator, getFabricatorDynamicPricing, updateFabricatorDynamicPricing, listOrders, getInventory, listAdjustmentRequests, createInventoryItem, adjustInventory, deleteInventoryItem, decideFulfillment, assignDealership, promoteToDealership };
+module.exports = { listFabricators, registerFabricator, getFabricatorDynamicPricing, updateFabricatorDynamicPricing, listOrders, getInventory, listAdjustmentRequests, createInventoryItem, adjustInventory, deleteInventoryItem, decideFulfillment, assignDealership, promoteToDealership, listOrders, getOrder };
