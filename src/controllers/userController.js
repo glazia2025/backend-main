@@ -603,4 +603,4 @@ const sendContactMail = async (firstName, lastName, email, phoneNumber, company,
 };
 
 
-module.exports = { createUser, getUser, updateUser, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement };
+module.exports = { createUser, getUser, updateUser, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement, getDynamicPricingLabels, mergePricing };

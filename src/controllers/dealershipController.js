@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const { UserOrder } = require('../models/Order');
 const { DealershipInventory, InventoryMovement } = require('../models/DealershipInventory');
-const { uploadPartnerAgreement } = require('./userController');
+const { uploadPartnerAgreement, getDynamicPricingLabels, mergePricing } = require('./userController');
 const StockAdjustmentRequest = require('../models/StockAdjustmentRequest');
 
 const getDealership = async (req, res) => {
@@ -71,6 +71,67 @@ const registerFabricator = async (req, res) => {
     console.error('Error registering fabricator:', error);
     if (error?.code === 11000) return res.status(409).json({ message: 'Email or phone number is already registered' });
     res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const getFabricatorDynamicPricing = async (req, res) => {
+  try {
+    const dealership = await getDealership(req, res);
+    if (!dealership) return;
+    if (!mongoose.isValidObjectId(req.params.fabricatorId)) return res.status(400).json({ message: 'Invalid fabricator ID' });
+    const fabricator = await User.findOne({ _id: req.params.fabricatorId, accountType: 'FABRICATOR', dealership: dealership._id });
+    if (!fabricator) return res.status(404).json({ message: 'Fabricator is not registered under this dealership' });
+    const { hardwareLabels, profileLabels } = await getDynamicPricingLabels();
+    return res.json({
+      fabricator: { _id: fabricator._id, name: fabricator.name, email: fabricator.email, phoneNumber: fabricator.phoneNumber },
+      dynamicPricing: {
+        hardware: mergePricing(hardwareLabels, fabricator.dynamicPricing?.hardware),
+        profiles: mergePricing(profileLabels, fabricator.dynamicPricing?.profiles),
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching fabricator dynamic pricing:', error);
+    return res.status(500).json({ message: 'Unable to load dynamic pricing' });
+  }
+};
+
+const normalizePricingInput = (value, label) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    const error = new Error(`${label} pricing must be an object`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, amount]) => {
+    const number = Number(amount);
+    if (!String(key).trim() || !Number.isFinite(number)) {
+      const error = new Error(`${label} pricing contains an invalid rate`);
+      error.statusCode = 400;
+      throw error;
+    }
+    return [String(key).trim(), number];
+  }));
+};
+
+const updateFabricatorDynamicPricing = async (req, res) => {
+  try {
+    const dealership = await getDealership(req, res);
+    if (!dealership) return;
+    if (!mongoose.isValidObjectId(req.params.fabricatorId)) return res.status(400).json({ message: 'Invalid fabricator ID' });
+    const fabricator = await User.findOne({ _id: req.params.fabricatorId, accountType: 'FABRICATOR', dealership: dealership._id });
+    if (!fabricator) return res.status(404).json({ message: 'Fabricator is not registered under this dealership' });
+    const hardware = normalizePricingInput(req.body.hardware, 'Hardware');
+    const profiles = normalizePricingInput(req.body.profiles, 'Profile');
+    const { hardwareLabels, profileLabels } = await getDynamicPricingLabels();
+    fabricator.dynamicPricing = {
+      hardware: mergePricing(hardwareLabels, hardware),
+      profiles: mergePricing(profileLabels, profiles),
+    };
+    fabricator.markModified('dynamicPricing');
+    await fabricator.save();
+    return res.json({ message: `Dynamic pricing updated for ${fabricator.name}`, dynamicPricing: fabricator.dynamicPricing });
+  } catch (error) {
+    console.error('Error updating fabricator dynamic pricing:', error);
+    return res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Unable to update dynamic pricing' });
   }
 };
 
@@ -239,4 +300,4 @@ const decideFulfillment = async (req, res) => {
   }
 };
 
-module.exports = { listFabricators, registerFabricator, listOrders, getInventory, listAdjustmentRequests, createInventoryItem, adjustInventory, deleteInventoryItem, decideFulfillment, assignDealership, promoteToDealership };
+module.exports = { listFabricators, registerFabricator, getFabricatorDynamicPricing, updateFabricatorDynamicPricing, listOrders, getInventory, listAdjustmentRequests, createInventoryItem, adjustInventory, deleteInventoryItem, decideFulfillment, assignDealership, promoteToDealership };
