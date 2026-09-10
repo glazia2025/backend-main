@@ -40,6 +40,7 @@ const {
   deleteInventoryItem,
 } = require('../controllers/glaziaInventoryController');
 const { listAdminAccounts, createAdminAccount, updateAdminAccount } = require('../controllers/adminAccountController');
+const { getAdminAnalytics, getFilteredAnalytics } = require('../controllers/analyticsController');
 const router = express.Router();
 const can = isAdmin.withPermission;
 const agreementUpload = multer({
@@ -114,6 +115,11 @@ router.delete('/leads/:leadId', can('USERS'), deleteLead);
 router.get('/admin-accounts', can('ADMIN_ACCOUNTS'), listAdminAccounts);
 router.post('/admin-accounts', can('ADMIN_ACCOUNTS'), createAdminAccount);
 router.patch('/admin-accounts/:adminId', can('ADMIN_ACCOUNTS'), updateAdminAccount);
+
+// Analytics & Dashboard routes
+router.get('/analytics', can('DASHBOARD'), getAdminAnalytics);
+router.get('/analytics/dashboard', can('DASHBOARD'), getAdminAnalytics);
+router.get('/analytics/filtered', can('DASHBOARD'), getFilteredAnalytics);
 
 router.use((error, _req, res, next) => {
   if (error instanceof multer.MulterError || error.message === 'Only PDF files are allowed') {
