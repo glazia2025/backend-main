@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const isUser = require('../middleware/userMiddleware');
-const { listFabricators, registerFabricator, listOrders, getInventory, listAdjustmentRequests, createInventoryItem, adjustInventory, deleteInventoryItem, decideFulfillment } = require('../controllers/dealershipController');
+const { listFabricators, registerFabricator, listOrders, getOrder, getInventory, listAdjustmentRequests, createInventoryItem, adjustInventory, deleteInventoryItem, decideFulfillment } = require('../controllers/dealershipController');
 
 const router = express.Router();
 const agreementUpload = multer({
@@ -13,6 +13,7 @@ router.use(isUser);
 router.get('/fabricators', listFabricators);
 router.post('/fabricators', agreementUpload.single('paPdf'), registerFabricator);
 router.get('/orders', listOrders);
+router.get('/orders/:orderId', getOrder);
 router.get('/inventory', getInventory);
 router.get('/stock-adjustment-requests', listAdjustmentRequests);
 router.post('/inventory', createInventoryItem);
