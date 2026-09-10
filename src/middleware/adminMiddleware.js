@@ -13,6 +13,7 @@ const isAdmin = async (req, res, next) => {
   try {
     // Verify JWT token
     const decoded = verifyJwt(token);
+    console.log("APPROVE PAYMENT JWT:", decoded);
 
     // Check if the user is admin
     if (decoded.role !== 'admin') {
@@ -44,5 +45,91 @@ isAdmin.withPermission = (permission) => (req, res, next) => {
     return next();
   });
 };
+const isAdminOrDealership = async (req, res, next) => {
+  console.log(">>> isAdminOrDealership HIT <<<");
+  const token = extractAuthToken(req);
+
+  if (!token) {
+    return res.status(403).json({
+      message: 'Access denied, token missing!'
+    });
+  }
+
+  try {
+    const decoded = verifyJwt(token);
+    console.log(">>> DECODED JWT <<<", decoded);
+
+    // Admin
+    if (decoded.role === 'admin') {
+      if (
+        decoded.superAdmin === true &&
+        decoded.email &&
+        decoded.email ===
+          String(process.env.SUPER_ADMIN_EMAIL || '').trim().toLowerCase()
+      ) {
+        req.user = {
+          ...decoded,
+          permissions: ['*']
+        };
+
+        return next();
+      }
+
+      const admin = decoded.userId
+        ? await User.findOne({
+            _id: decoded.userId,
+            accountType: 'ADMIN',
+            isActive: { $ne: false }
+          }).select('adminPermissions name phoneNumber')
+        : null;
+
+      if (!admin) {
+        return res.status(403).json({
+          message: 'Admin account is disabled or no longer exists.'
+        });
+      }
+
+      req.user = {
+        ...decoded,
+        permissions: admin.adminPermissions || []
+      };
+
+      return next();
+    }
+
+    // Dealership
+   if (decoded.role === 'user') {
+      const dealership = decoded.userId
+        ? await User.findOne({
+            _id: decoded.userId,
+            accountType: 'DEALERSHIP',
+            isActive: { $ne: false }
+          }).select('name phoneNumber')
+        : null;
+
+      if (!dealership) {
+        return res.status(403).json({
+          message: 'Dealership account is disabled or no longer exists.'
+        });
+      }
+
+      req.user = {
+        ...decoded,
+        permissions: ['ORDERS']
+      };
+
+      return next();
+    }
+
+    return res.status(403).json({
+      message: 'Access denied.'
+    });
+  } catch (err) {
+    return res.status(400).json({
+      message: 'Invalid token!'
+    });
+  }
+};
+isAdmin.isAdminOrDealership = isAdminOrDealership;
 
 module.exports = isAdmin;
