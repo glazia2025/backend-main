@@ -28,3 +28,25 @@ The admin portal also supports one environment-managed super admin. Configure
 database-managed administrator accounts continue to sign in by mobile OTP.
 
 Use the same production `JWT_SECRET` in `backend-quotation/prod.env`.
+
+## Manual NALCO WhatsApp broadcast
+
+The React admin dashboard (`Glazia-Windoors/frontend`) includes a NALCO WhatsApp
+update panel for admins with `USERS` permission (including super admins).
+`GET /api/admin/nalco-broadcast` returns the latest stored rate and last manual
+broadcast. `POST /api/admin/nalco-broadcast` accepts `{ "rateId": "<confirmed latest record id>" }`,
+rechecks the latest rate, and starts a background broadcast using the existing
+`daily_update` template and recipient normalization/deduplication.
+
+The result is persisted in MongoDB's `nalcobroadcasts` collection. Counts describe
+API request acceptance, not device delivery. No automatic retry is performed.
+The database lock prevents concurrent manual broadcasts across server processes;
+it does not suppress the scheduled cron broadcast. Avoid manual sends near a
+scheduled send unless another message is intended.
+
+The worker runs in the API process. If that process stops during a send, the
+record stays `running` and further manual sends are blocked to avoid duplicates.
+After verifying the worker is stopped and investigating the accepted requests,
+an operator can mark that record `failed` in MongoDB to unlock manual sending.
+Do not clear the lock while a worker may still be running. This is not a durable
+queue and does not resume interrupted broadcasts automatically.

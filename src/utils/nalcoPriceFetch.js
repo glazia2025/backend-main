@@ -2,6 +2,7 @@ const { Builder, By } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
 const fs = require("fs");
 const axios = require("axios");
+const https = require("https");
 const path = require("path");
 const pdfParse = require("pdf-parse");
 const os = require("os");
@@ -90,7 +91,12 @@ const downloadPdf = async () => {
 
     const pdfPath = path.join(os.tmpdir(), `nalco_price_${Date.now()}.pdf`);
     try {
-      const response = await axios.get(pdfUrl, { responseType: "arraybuffer" });
+      const response = await axios.get(pdfUrl, {
+        responseType: "arraybuffer",
+        timeout: 30000,
+        // Work around NALCO's incomplete certificate chain for this download only.
+        httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+      });
       fs.writeFileSync(pdfPath, response.data);
       console.log("pdfPath", pdfPath);
 

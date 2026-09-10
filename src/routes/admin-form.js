@@ -41,6 +41,7 @@ const {
 } = require('../controllers/glaziaInventoryController');
 const { listAdminAccounts, createAdminAccount, updateAdminAccount } = require('../controllers/adminAccountController');
 const { getAdminAnalytics, getFilteredAnalytics } = require('../controllers/analyticsController');
+const nalcoBroadcast = require("../controllers/nalcoBroadcastController");
 const router = express.Router();
 const can = isAdmin.withPermission;
 const agreementUpload = multer({
@@ -82,6 +83,8 @@ router.delete(
 router.get("/getProducts", can('PRODUCTS'), getProducts);
 router.put("/edit-hardware/:option/:productId", can('PRODUCTS'), editHardware);
 router.delete("/delete-hardware/:option/:productId", can('PRODUCTS'), deleteHardware);
+router.get("/nalco-broadcast", can("USERS"), nalcoBroadcast.getStatus);
+router.post("/nalco-broadcast", can("USERS"), nalcoBroadcast.send);
 router.post("/update-nalco", can('PRODUCTS'), updateNalco);
 router.get("/get-tech-sheet", isUser, getTechSheet);
 router.post("/approve-payment", can('ORDERS'), approvePayment);
