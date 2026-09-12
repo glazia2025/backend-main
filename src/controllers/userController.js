@@ -219,6 +219,29 @@ const deleteUser = async (req, res) => {
   }
 };
 
+const updateUserModuleAccess = async (req, res) => {
+  const allowedModules = ['MAIN_SITE', 'QUOTATION_ERP'];
+  const disabledModules = Array.isArray(req.body.disabledModules)
+    ? [...new Set(req.body.disabledModules)]
+    : null;
+  if (!disabledModules || disabledModules.some((moduleName) => !allowedModules.includes(moduleName))) {
+    return res.status(400).json({ message: 'disabledModules must contain only MAIN_SITE and QUOTATION_ERP' });
+  }
+  try {
+    const user = await User.findOneAndUpdate(
+      { _id: req.params.userId, accountType: { $ne: 'ADMIN' } },
+      { $set: { disabledModules } },
+      { new: true, runValidators: true }
+    ).select('name email phoneNumber accountType disabledModules');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    return res.json({ message: `Module access updated for ${user.name}`, user });
+  } catch (error) {
+    if (error?.name === 'CastError') return res.status(400).json({ message: 'Invalid user ID' });
+    console.error('Error updating user module access:', error);
+    return res.status(500).json({ message: 'Unable to update module access' });
+  }
+};
+
 // API to store user data when they log in with mobile number
 const createUser = async (req, res) => {
   const {
@@ -569,6 +592,7 @@ const listUsers = async (req, res) => {
       accountType: 1,
       dealership: 1,
       partnerAgreement: 1,
+      disabledModules: 1,
     }).sort({ name: 1 });
 
     res.status(200).json({ users });
@@ -645,4 +669,4 @@ const sendContactMail = async (firstName, lastName, email, phoneNumber, company,
 };
 
 
-module.exports = { createUser, getUser, updateUser, deleteUser, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement, getDynamicPricingLabels, mergePricing };
+module.exports = { createUser, getUser, updateUser, deleteUser, updateUserModuleAccess, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement, getDynamicPricingLabels, mergePricing };

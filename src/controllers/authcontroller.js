@@ -80,6 +80,13 @@ const sendLoginOtp = async (otp, number) => {
 
 
 const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
+const ACCESS_MODULES = ['MAIN_SITE', 'QUOTATION_ERP'];
+const requestedAccessModule = (req) => ACCESS_MODULES.includes(req.body?.accessModule) ? req.body.accessModule : null;
+const moduleDisabledResponse = (res, moduleName) => res.status(403).json({
+  message: `Your access to ${moduleName === 'MAIN_SITE' ? 'the Glazia Main Site' : 'Quotation ERP'} has been disabled. Contact Glazia administration.`,
+  code: 'MODULE_ACCESS_DISABLED',
+  module: moduleName,
+});
 const secureEqual = (left, right) => {
   const leftDigest = crypto.createHash('sha256').update(String(left)).digest();
   const rightDigest = crypto.createHash('sha256').update(String(right)).digest();
@@ -109,9 +116,14 @@ const loginSuperAdmin = (req, res) => {
 const sendWhatsAppOTP = async (req, res) => {
   const phoneNumber = String(req.body.phoneNumber || '').trim();
   if (!/^\d{10}$/.test(phoneNumber)) return res.status(400).json({ message: 'Enter a valid 10-digit Indian mobile number.' });
-  const otp = generateOtp();
 
   try {
+    const accessModule = requestedAccessModule(req);
+    if (accessModule) {
+      const user = await User.findOne({ $or: [{ phoneNumber }, { phoneNumbers: phoneNumber }] }).select('disabledModules').lean();
+      if (user?.disabledModules?.includes(accessModule)) return moduleDisabledResponse(res, accessModule);
+    }
+    const otp = generateOtp();
     await sendLoginOtp(otp, phoneNumber);
 
     await Otp.findOneAndUpdate(
@@ -187,12 +199,14 @@ const verifyOTP = async (req, res) => {
     const record = await Otp.findOne({ phone: phoneNumber, otp });
 
     if (record) {
-      await Otp.deleteOne({ phone: phoneNumber });
       const existingUser = await User.findOne({
         $or: [{ phoneNumber }, { phoneNumbers: phoneNumber }],
       });
 
       if (existingUser) {
+        const accessModule = requestedAccessModule(req);
+        if (accessModule && existingUser.disabledModules?.includes(accessModule)) return moduleDisabledResponse(res, accessModule);
+        await Otp.deleteOne({ phone: phoneNumber });
         const token = signJwt(
           { phoneNumber, userId: existingUser._id, role: 'user' },
           { expiresIn: '120d' }
