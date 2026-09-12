@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const isUser = require('../middleware/userMiddleware');
-const { listFabricators, registerFabricator, getFabricatorDynamicPricing, updateFabricatorDynamicPricing, listOrders, getInventory, listAdjustmentRequests, createInventoryItem, adjustInventory, deleteInventoryItem, decideFulfillment, listOrders, getOrder } = require('../controllers/dealershipController');
+const { listFabricators, registerFabricator, getFabricatorDynamicPricing, updateFabricatorDynamicPricing, listOrders, getInventory, listAdjustmentRequests, createInventoryItem, adjustInventory, deleteInventoryItem, decideFulfillment, getOrder } = require('../controllers/dealershipController');
 
 const router = express.Router();
 const agreementUpload = multer({

@@ -321,4 +321,4 @@ const decideFulfillment = async (req, res) => {
   }
 };
 
-module.exports = { listFabricators, registerFabricator, getFabricatorDynamicPricing, updateFabricatorDynamicPricing, listOrders, getInventory, listAdjustmentRequests, createInventoryItem, adjustInventory, deleteInventoryItem, decideFulfillment, assignDealership, promoteToDealership, listOrders, getOrder };
+module.exports = { listFabricators, registerFabricator, getFabricatorDynamicPricing, updateFabricatorDynamicPricing, listOrders, getInventory, listAdjustmentRequests, createInventoryItem, adjustInventory, deleteInventoryItem, decideFulfillment, assignDealership, promoteToDealership, getOrder };
