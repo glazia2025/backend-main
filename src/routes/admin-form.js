@@ -93,8 +93,19 @@ router.post(
   isAdmin.isAdminOrDealership,
   approvePayment
 );
-router.post("/update-payment-due-date", can('ORDERS'), updatePaymentDueDate);
-router.post("/complete-order", can('ORDERS'), express.json({ limit: "50mb" }), completeOrder);
+// router.post("/update-payment-due-date", can('ORDERS'), updatePaymentDueDate);
+router.post(
+  "/update-payment-due-date",
+  isAdmin.isAdminOrDealership,
+  updatePaymentDueDate
+);
+// router.post("/complete-order", can('ORDERS'), express.json({ limit: "50mb" }), completeOrder);
+router.post(
+  "/complete-order",
+  isAdmin.isAdminOrDealership,
+  express.json({ limit: "50mb" }),
+  completeOrder
+);
 router.post("/toggle-profile-availability", can('PRODUCTS'), toggleProfileAvailability);
 router.get('/get-profile-heirarchy', can('PRODUCTS'), getProfileHierarchy);
 router.post('/toggle-cat', can('PRODUCTS'), toggleCatEnabled);

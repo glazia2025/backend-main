@@ -366,10 +366,20 @@ const updatePaymentDueDate = async (req, res) => {
   }
 
   try {
-    const order = await UserOrder.findOne({
-      _id: orderId,
-      "payments._id": paymentId,
-    });
+    // const order = await UserOrder.findOne({
+    //   _id: orderId,
+    //   "payments._id": paymentId,
+    // });
+    const orderQuery = {
+  _id: orderId,
+  "payments._id": paymentId,
+};
+
+if (req.user?.role !== "admin") {
+  orderQuery.dealership = req.user.userId;
+}
+
+const order = await UserOrder.findOne(orderQuery);
 
     if (!order) {
       return res.status(400).json({
@@ -421,9 +431,18 @@ const completeOrder = async (req, res) => {
   }
 
   try {
-    const order = await UserOrder.findOne({
-      _id: orderId,
-    });
+    // const order = await UserOrder.findOne({
+    //   _id: orderId,
+    // });
+    const orderQuery = {
+  _id: orderId,
+};
+
+if (req.user?.role !== "admin") {
+  orderQuery.dealership = req.user.userId;
+}
+
+const order = await UserOrder.findOne(orderQuery);
 
     if (!order) {
       return res.status(400).json({
