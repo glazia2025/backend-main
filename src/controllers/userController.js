@@ -4,6 +4,7 @@ const {
   PutObjectCommand,
   ListObjectsV2Command,
   DeleteObjectsCommand,
+  DeleteObjectCommand,
 } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 const path = require('path');
@@ -152,12 +153,15 @@ const deleteExistingPaFiles = async (bucket, prefix) => {
 
     const keys = (response.Contents || []).map((item) => ({ Key: item.Key }));
     if (keys.length) {
-      await s3Client.send(
+      const deleteResponse = await s3Client.send(
         new DeleteObjectsCommand({
           Bucket: bucket,
           Delete: { Objects: keys, Quiet: true },
         })
       );
+      if (deleteResponse.Errors?.length) {
+        throw new Error(`S3 could not delete ${deleteResponse.Errors.length} partner agreement file(s)`);
+      }
     }
 
     continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
@@ -175,6 +179,44 @@ const uploadPartnerAgreement = async (file, phoneNumber) => {
   const objectKey = `${objectPrefix}${crypto.randomUUID()}${ext}`;
   await s3Client.send(new PutObjectCommand({ Bucket: bucket, Key: objectKey, Body: file.buffer, ContentType: file.mimetype || 'application/pdf', ACL: 'public-read' }));
   return buildS3PublicUrl(bucket, region, objectKey);
+};
+
+const deletePartnerAgreementByUrl = async (bucket, paUrl) => {
+  const publicBaseUrl = String(process.env.AWS_S3_BASE_URL || '').replace(/\/+$/, '');
+  const agreementUrl = String(paUrl || '').trim();
+  let objectKey = '';
+  if (publicBaseUrl && agreementUrl.startsWith(`${publicBaseUrl}/`)) {
+    objectKey = agreementUrl.slice(publicBaseUrl.length + 1);
+  } else {
+    const pathname = new URL(agreementUrl).pathname.replace(/^\/+/, '');
+    objectKey = pathname.startsWith(`${bucket}/`) ? pathname.slice(bucket.length + 1) : pathname;
+  }
+  objectKey = decodeURIComponent(objectKey);
+  if (!objectKey || objectKey.includes('..')) throw new Error('Partner agreement S3 key could not be determined from paUrl');
+  await s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }));
+};
+
+const deleteUser = async (req, res) => {
+  try {
+    const userId = String(req.params.userId || '').trim();
+    if (!userId) return res.status(400).json({ message: 'User ID is required' });
+    const user = await User.findOne({ _id: userId, accountType: { $ne: 'ADMIN' } }).select('name phoneNumber paUrl');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (user.paUrl) {
+      const bucket = process.env.AWS_S3_BUCKET;
+      if (!bucket) return res.status(503).json({ message: 'S3 is not configured, so the user was not deleted.' });
+      await deletePartnerAgreementByUrl(bucket, user.paUrl);
+    }
+
+    const deletion = await User.deleteOne({ _id: user._id, accountType: { $ne: 'ADMIN' } });
+    if (deletion.deletedCount !== 1) return res.status(409).json({ message: 'The user changed while deletion was in progress. Please refresh and try again.' });
+    return res.json({ message: `User "${user.name}" and partner agreement deleted successfully` });
+  } catch (error) {
+    console.error('Error deleting user and partner agreement:', error);
+    if (error?.name === 'CastError') return res.status(400).json({ message: 'Invalid user ID' });
+    return res.status(502).json({ message: 'Unable to delete the partner agreement from S3, so the user was not deleted.', error: error.message });
+  }
 };
 
 // API to store user data when they log in with mobile number
@@ -603,4 +645,4 @@ const sendContactMail = async (firstName, lastName, email, phoneNumber, company,
 };
 
 
-module.exports = { createUser, getUser, updateUser, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement, getDynamicPricingLabels, mergePricing };
+module.exports = { createUser, getUser, updateUser, deleteUser, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement, getDynamicPricingLabels, mergePricing };
