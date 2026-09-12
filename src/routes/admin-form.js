@@ -27,7 +27,7 @@ const {
   deleteHardwareCategory,
 } = require("../controllers/hardwareController");
 const { updateNalco, approvePayment, completeOrder, updatePaymentDueDate } = require("../controllers/orderController");
-const { getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers } = require("../controllers/userController");
+const { getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, deleteUser, updateUserModuleAccess } = require("../controllers/userController");
 const { listLeads, updateLead, deleteLead } = require("../controllers/authcontroller");
 const isUser = require("../middleware/userMiddleware");
 const { assignDealership, promoteToDealership } = require('../controllers/dealershipController');
@@ -114,6 +114,8 @@ router.post('/toggle-cat', can('PRODUCTS'), toggleCatEnabled);
 router.put('/update-dynamic-pricing/:userId', can('USERS'), updateDynamicPricing);
 router.get('/get-dynamic-pricing/:userId', can('USERS'), getDynamicPricing);
 router.get('/users', can('USERS'), listUsers);
+router.delete('/users/:userId', can('USERS'), deleteUser);
+router.patch('/users/:userId/module-access', can('USERS'), updateUserModuleAccess);
 router.put('/users/:userId/dealership', can('USERS'), assignDealership);
 router.post('/users/:userId/promote-dealership', can('USERS'), agreementUpload.single('paPdf'), promoteToDealership);
 router.get('/stock-adjustment-requests', can('STOCK_APPROVALS'), listStockAdjustmentRequests);

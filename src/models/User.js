@@ -22,6 +22,11 @@ const userSchema = new mongoose.Schema({
     default: []
   },
   isActive: { type: Boolean, default: true },
+  disabledModules: {
+    type: [String],
+    enum: ['MAIN_SITE', 'QUOTATION_ERP'],
+    default: []
+  },
   dealership: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

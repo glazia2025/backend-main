@@ -3,7 +3,7 @@ const { verifyJwt } = require('../utils/jwt');
 const User = require('../models/User');
 require('dotenv').config();
 
-const isUser = (req, res, next) => {
+const isUser = async (req, res, next) => {
   const token = extractAuthToken(req);
 
   if (!token) {
@@ -11,17 +11,21 @@ const isUser = (req, res, next) => {
   }
 
   try {
-    console.log( "token", token);
-    // Verify JWT token
     const decoded = verifyJwt(token);
-
-    console.log(decoded);
 
     // Check if the user is user
     if (!['user', 'admin'].includes(decoded.role)) {
       return res.status(403).json({ message: 'Access denied, user only!' });
     }
 
+
+    if (decoded.role === 'user') {
+      const user = await User.findById(decoded.userId).select('disabledModules').lean();
+      if (!user) return res.status(403).json({ message: 'This user account no longer exists.', code: 'USER_NOT_FOUND' });
+      if (user.disabledModules?.includes('MAIN_SITE')) {
+        return res.status(403).json({ message: 'Your access to the Glazia Main Site has been disabled. Contact Glazia administration.', code: 'MODULE_ACCESS_DISABLED', module: 'MAIN_SITE' });
+      }
+    }
 
     req.user = decoded; // Attach user info to request
     next(); // Proceed to next route handler
