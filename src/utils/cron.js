@@ -106,16 +106,16 @@ const shouldSendDailyWhatsappUpdate = (date = new Date()) => {
 
 
 const runJob = async () => {
-
+  const scheduledDailyUpdate = shouldSendDailyWhatsappUpdate();
   const price = await downloadPdf();
 
   console.log('Price sending', price);
 
-  if (price) {
+  if (Number.isFinite(Number(price)) && Number(price) > 0) {
     const res = await updateNalcoPrice(price);
     if (res) {
       console.log("Database updated successfully via service");
-      if (res.changed || shouldSendDailyWhatsappUpdate()) {
+      if (res.changed || scheduledDailyUpdate) {
         console.log(
           res.changed
             ? `Nalco ${res.direction} detected; sending WhatsApp update`
@@ -130,7 +130,22 @@ const runJob = async () => {
     } else {
       console.log("Failed to save new price");
     }
-    
+    return;
+  }
+
+  if (scheduledDailyUpdate) {
+    try {
+      const latest = await Nalco.findOne({ nalcoPrice: { $gt: 0 } }).sort({ date: -1 });
+      const latestPrice = Number(latest?.nalcoPrice);
+      if (!Number.isFinite(latestPrice) || latestPrice <= 0) {
+        console.error("Scheduled 10:00 AM Nalco update skipped: no valid price was scraped and no valid database price exists.");
+        return;
+      }
+      console.warn(`No valid NALCO price link was found; sending latest database price ${latestPrice} for the scheduled 10:00 AM update.`);
+      await sendNalcoMessageToUsers(latestPrice);
+    } catch (error) {
+      console.error("Failed to send stored Nalco price for scheduled WhatsApp update:", error.message);
+    }
   }
 };
 // runJob();
@@ -139,3 +154,5 @@ cron.schedule("*/15 * * * *", runJob, {
   timezone: CRON_TIMEZONE,
 });
 console.log("Cron job scheduled every 15 minutes");
+
+module.exports = { runJob, shouldSendDailyWhatsappUpdate, updateNalcoPrice };
