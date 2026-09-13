@@ -13,34 +13,77 @@ const aggregateProducts = (products) => {
 
 const consumeStock = async (dealershipId, products, orderId) => {
   const consumed = [];
+  const remaining = [];
+
   for (const product of aggregateProducts(products)) {
-    const inventory = await DealershipInventory.findOneAndUpdate(
-      { dealership: dealershipId, productId: product.productId, quantity: { $gte: product.quantity } },
-      { $inc: { quantity: -product.quantity } },
-      { new: true }
+    const inventory = await DealershipInventory.findOne({
+      dealership: dealershipId,
+      productId: product.productId,
+    });
+
+    const availableQuantity = Number(inventory?.quantity || 0);
+    const orderedQuantity = Number(product.quantity || 0);
+
+    const dealerQuantity = Math.min(
+      orderedQuantity,
+      availableQuantity
     );
-    if (!inventory) {
-      for (const rollback of consumed) {
-        await DealershipInventory.updateOne(
-          { dealership: dealershipId, productId: rollback.productId },
-          { $inc: { quantity: rollback.quantity } }
+
+    const remainingQuantity =
+      orderedQuantity - dealerQuantity;
+    if (dealerQuantity > 0) {
+      const updatedInventory = await DealershipInventory.findOneAndUpdate(
+        {
+          dealership: dealershipId,
+          productId: product.productId,
+          quantity: { $gte: dealerQuantity },
+        },
+        {
+          $inc: { quantity: -dealerQuantity },
+        },
+        { new: true }
+      );
+
+      if (!updatedInventory) {
+        throw new Error(
+          `Unable to consume stock for product ${product.productId}`
         );
       }
-      return false;
-    }
-    consumed.push({ ...product, balanceAfter: inventory.quantity });
-  }
-  await InventoryMovement.insertMany(consumed.map((product) => ({
-    dealership: dealershipId,
-    productId: product.productId,
-    quantityChange: -product.quantity,
-    balanceAfter: product.balanceAfter,
-    reason: 'FABRICATOR_ORDER_PLACED',
-    order: orderId,
-  })));
-  return true;
-};
 
+      consumed.push({
+        ...product,
+        quantity: dealerQuantity,
+        balanceAfter: updatedInventory.quantity,
+      });
+    }
+
+    if (remainingQuantity > 0) {
+      remaining.push({
+        ...product,
+        quantity: remainingQuantity,
+      });
+    }
+  }
+
+  if (consumed.length > 0) {
+    await InventoryMovement.insertMany(
+      consumed.map((product) => ({
+        dealership: dealershipId,
+        productId: product.productId,
+        quantityChange: -product.quantity,
+        balanceAfter: product.balanceAfter,
+        reason: "FABRICATOR_ORDER_PLACED",
+        order: orderId,
+      }))
+    );
+  }
+
+  return {
+    fulfilledFromStock: remaining.length === 0,
+    consumedProducts: consumed,
+    remainingProducts: remaining,
+  };
+};
 const addStock = async (dealershipId, products, orderId) => {
   for (const product of aggregateProducts(products)) {
     const inventory = await DealershipInventory.findOneAndUpdate(

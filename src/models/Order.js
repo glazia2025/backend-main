@@ -68,6 +68,10 @@ const userOrderSchema = new mongoose.Schema(
       decidedAt: { type: Date, default: null },
       decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
       notes: { type: String, default: "" },
+      remainingProducts: {
+    type: [orderSchema],
+    default: [],
+  },
     },
     orderChannel: {
       type: String,

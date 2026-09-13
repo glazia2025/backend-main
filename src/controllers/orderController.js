@@ -1,5 +1,6 @@
 const { UserOrder, Nalco } = require("../models/Order");
 const User = require("../models/User");
+const mongoose = require("mongoose");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
 const { extractQueryParams, escapeRegExp } = require("../utils/common");
@@ -7,7 +8,7 @@ const { sendNalcoMessageToUsers } = require("../utils/nalcoWhatsapp");
 const { consumeStock, addStock } = require("../services/dealershipInventoryService");
 
 const createOrder = async (req, res) => {
-  const { products, payment, totalAmount, deliveryType } = req.body;
+  const { products, payment, totalAmount, deliveryType, orderChannel, sourceOrderId,} = req.body;
   if (
     !products ||
     !Array.isArray(products) ||
@@ -49,7 +50,11 @@ const createOrder = async (req, res) => {
     };
 
     const isDealership = authenticatedUser.accountType === "DEALERSHIP";
+    const isDealerGlaziaOrder =
+  isDealership &&
+  orderChannel === "DEALER_DIRECT_FULFILLMENT" && sourceOrderId;
     const assignedDealership = authenticatedUser.dealership || (isDealership ? authenticatedUser._id : null);
+
     const newOrder = new UserOrder({
       user: orderUser,
       products,
@@ -66,9 +71,26 @@ const createOrder = async (req, res) => {
       deliveryType,
       dealership: assignedDealership,
       fulfillment: {
-        status: authenticatedUser.dealership ? "AWAITING_DEALER" : "GLAZIA_DIRECT",
-      },
-      inventoryDisposition: isDealership ? "ADD_TO_DEALER_STOCK" : "NONE",
+  status: isDealerGlaziaOrder
+    ? "GLAZIA_DIRECT"
+    : authenticatedUser.dealership
+      ? "AWAITING_DEALER"
+      : "GLAZIA_DIRECT",
+},
+
+orderChannel: isDealerGlaziaOrder
+  ? "DEALER_DIRECT_FULFILLMENT"
+  : "CUSTOMER",
+
+inventoryDisposition: isDealerGlaziaOrder
+  ? "DIRECT_TO_FABRICATOR"
+  : isDealership
+    ? "ADD_TO_DEALER_STOCK"
+    : "NONE",
+    sourceOrder: isDealerGlaziaOrder
+  ? sourceOrderId
+  : null,
+
       deliveryAddress: {
         name: authenticatedUser.name,
         phoneNumber: authenticatedUser.phoneNumber,
@@ -80,48 +102,55 @@ const createOrder = async (req, res) => {
     });
     const savedOrder = await newOrder.save();
 
-    if (authenticatedUser.dealership) {
-      const fulfilledFromStock = await consumeStock(authenticatedUser.dealership, products, savedOrder._id);
-      if (fulfilledFromStock) {
-        savedOrder.fulfillment.status = "DEALER_STOCK";
-        savedOrder.fulfillment.decidedAt = new Date();
-        savedOrder.fulfillment.decidedBy = authenticatedUser.dealership;
-        savedOrder.inventoryDisposition = "CONSUMED_FROM_DEALER_STOCK";
-      } else {
-        const dealership = await User.findById(authenticatedUser.dealership).lean();
-        if (!dealership) throw new Error("Assigned dealership could not be found");
-        const upstreamOrder = await UserOrder.create({
-          user: {
-            userId: dealership._id,
-            name: dealership.name,
-            city: dealership.city,
-            phoneNumber: dealership.phoneNumber,
-          },
-          products,
-          payments: [],
-          totalAmount,
-          deliveryType,
-          dealership: dealership._id,
-          fulfillment: { status: "GLAZIA_DIRECT" },
-          orderChannel: "DEALER_DIRECT_FULFILLMENT",
-          inventoryDisposition: "DIRECT_TO_FABRICATOR",
-          sourceOrder: savedOrder._id,
-          deliveryAddress: {
-            name: authenticatedUser.name,
-            phoneNumber: authenticatedUser.phoneNumber,
-            address: authenticatedUser.address,
-            city: authenticatedUser.city,
-            state: authenticatedUser.state,
-            pincode: authenticatedUser.pincode,
-          },
-        });
-        savedOrder.fulfillment.status = "GLAZIA_VIA_DEALER";
-        savedOrder.fulfillment.decidedAt = new Date();
-        savedOrder.fulfillment.decidedBy = dealership._id;
-        savedOrder.upstreamOrder = upstreamOrder._id;
-      }
-      await savedOrder.save();
+    if (authenticatedUser.dealership && !isDealerGlaziaOrder) {
+  const stockResult = await consumeStock(
+    authenticatedUser.dealership,
+    products,
+    savedOrder._id
+  );
+
+  if (stockResult.fulfilledFromStock) {
+    savedOrder.fulfillment.status = "DEALER_STOCK";
+    savedOrder.fulfillment.decidedAt = new Date();
+    savedOrder.fulfillment.decidedBy = authenticatedUser.dealership;
+    savedOrder.inventoryDisposition = "CONSUMED_FROM_DEALER_STOCK";
+    savedOrder.fulfillment.remainingProducts = [];
+  } else {
+    savedOrder.fulfillment.status = "GLAZIA_VIA_DEALER";
+    savedOrder.fulfillment.decidedAt = new Date();
+    savedOrder.fulfillment.decidedBy = authenticatedUser.dealership;
+
+    if (stockResult.consumedProducts.length > 0) {
+      savedOrder.inventoryDisposition = "CONSUMED_FROM_DEALER_STOCK";
     }
+    savedOrder.fulfillment.remainingProducts =
+  stockResult.remainingProducts;
+  }
+
+  await savedOrder.save();
+}
+    if (isDealerGlaziaOrder) {
+  if (!mongoose.isValidObjectId(sourceOrderId)) {
+    return res.status(400).json({
+      message: "Invalid source order ID",
+    });
+  }
+
+  const sourceOrder = await UserOrder.findOne({
+    _id: sourceOrderId,
+    dealership: authenticatedUser._id,
+    "fulfillment.status": "GLAZIA_VIA_DEALER",
+  });
+
+  if (!sourceOrder) {
+    return res.status(404).json({
+      message: "Original dealership order not found",
+    });
+  }
+
+  sourceOrder.upstreamOrder = savedOrder._id;
+  await sourceOrder.save();
+}
 
     res.status(201).json({
       message: "Order created successfully.",
@@ -151,6 +180,19 @@ const getOrders = async (req, res) => {
     if (user && user.role !== "admin") {
       query["user.userId"] = user.userId;
     }
+//     if (user && user.role === "admin") {
+//   query["fulfillment.status"] = "GLAZIA_DIRECT";
+// }
+if (user && user.role === "admin") {
+  const dealershipFabricators = await User.find({
+    accountType: "FABRICATOR",
+    dealership: { $ne: null },
+  }).select("_id");
+
+  query["user.userId"] = {
+    $nin: dealershipFabricators.map((fabricator) => fabricator._id),
+  };
+}
 
     if (filters.orderType && filters.orderType === "ongoing") {
       query["isComplete"] = false;
