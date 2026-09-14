@@ -180,7 +180,10 @@ const listOrders = async (req, res) => {
   try {
     const dealership = await getDealership(req, res);
     if (!dealership) return;
-    const orders = await UserOrder.find({ dealership: dealership._id }).sort({ createdAt: -1 });
+    const orders = await UserOrder.find({
+  dealership: dealership._id,
+  orderChannel: { $ne: 'DEALER_DIRECT_FULFILLMENT' },
+}).sort({ createdAt: -1 });
     res.json({ orders });
   } catch (error) {
     console.error('Error listing dealership orders:', error);
