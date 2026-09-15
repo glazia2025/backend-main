@@ -37,6 +37,20 @@ const isUser = async (req, res, next) => {
 isUser.withAdminPermission = (permission) => (req, res, next) => {
   isUser(req, res, () => {
     if (req.user.role !== 'admin') return next();
+
+    const configuredSuperAdminEmail = String(process.env.SUPER_ADMIN_EMAIL || '')
+      .trim()
+      .toLowerCase();
+    const tokenEmail = String(req.user.email || '').trim().toLowerCase();
+    if (
+      req.user.superAdmin === true &&
+      configuredSuperAdminEmail &&
+      tokenEmail === configuredSuperAdminEmail
+    ) {
+      req.user.permissions = ['*'];
+      return next();
+    }
+
     return User.findOne({ _id: req.user.userId, accountType: 'ADMIN', isActive: { $ne: false } }).select('adminPermissions').lean().then(admin => {
       const permissions = admin?.adminPermissions || [];
       if (!admin || (!permissions.includes('*') && !permissions.includes(permission))) return res.status(403).json({ message: `Access denied. ${permission} permission is required.` });
