@@ -4,8 +4,9 @@ const aggregateProducts = (products) => {
   const totals = new Map();
   for (const product of products || []) {
     const productId = String(product.productId);
-    const current = totals.get(productId) || { productId, description: product.description || '', quantity: 0 };
+    const current = totals.get(productId) || { productId, description: product.description || '', quantity: 0, amount: 0 };
     current.quantity += Number(product.quantity);
+    current.amount += Number(product.amount || 0);
     totals.set(productId, current);
   }
   return [...totals.values()];
@@ -23,6 +24,7 @@ const consumeStock = async (dealershipId, products, orderId) => {
 
     const availableQuantity = Number(inventory?.quantity || 0);
     const orderedQuantity = Number(product.quantity || 0);
+    const amountPerUnit = orderedQuantity > 0 ? Number(product.amount || 0) / orderedQuantity : 0;
 
     const dealerQuantity = Math.min(
       orderedQuantity,
@@ -53,6 +55,7 @@ const consumeStock = async (dealershipId, products, orderId) => {
       consumed.push({
         ...product,
         quantity: dealerQuantity,
+        amount: amountPerUnit * dealerQuantity,
         balanceAfter: updatedInventory.quantity,
       });
     }
@@ -61,6 +64,7 @@ const consumeStock = async (dealershipId, products, orderId) => {
       remaining.push({
         ...product,
         quantity: remainingQuantity,
+        amount: amountPerUnit * remainingQuantity,
       });
     }
   }

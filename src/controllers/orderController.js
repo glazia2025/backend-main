@@ -83,7 +83,7 @@ orderChannel: isDealerGlaziaOrder
   : "CUSTOMER",
 
 inventoryDisposition: isDealerGlaziaOrder
-  ? "DIRECT_TO_FABRICATOR"
+  ? "ADD_TO_DEALER_STOCK"
   : isDealership
     ? "ADD_TO_DEALER_STOCK"
     : "NONE",
@@ -494,6 +494,36 @@ const order = await UserOrder.findOne(orderQuery);
 
     if (order.isComplete) {
       return res.status(409).json({ message: "Order is already completed." });
+    }
+
+    if (
+      order.fulfillment?.status === "GLAZIA_VIA_DEALER" &&
+      order.fulfillment.remainingProducts?.length > 0 &&
+      !order.inventoryProcessedAt
+    ) {
+      const upstreamOrder = order.upstreamOrder
+        ? await UserOrder.findById(order.upstreamOrder).select('isComplete')
+        : null;
+      if (!upstreamOrder?.isComplete) {
+        return res.status(409).json({
+          message: "The Glazia shortage order must be delivered to the dealership before this fabricator order can be dispatched.",
+        });
+      }
+
+      const stockResult = await consumeStock(
+        order.dealership,
+        order.fulfillment.remainingProducts,
+        order._id
+      );
+      if (!stockResult.fulfilledFromStock) {
+        return res.status(409).json({
+          message: "The delivered items are not fully available in dealership inventory yet.",
+          remainingProducts: stockResult.remainingProducts,
+        });
+      }
+      order.fulfillment.remainingProducts = [];
+      order.fulfillment.status = "DEALER_STOCK";
+      order.inventoryProcessedAt = new Date();
     }
 
     order.biltyDoc = biltyDoc;

@@ -199,7 +199,7 @@ const getOrder = async (req, res) => {
     const order = await UserOrder.findOne({
       orderId: Number(req.params.orderId),
       dealership: dealership._id,
-    });
+    }).populate('upstreamOrder', 'orderId isComplete completedAt');
 
     if (!order) {
       return res.status(404).json({ message: 'Dealership order not found' });
