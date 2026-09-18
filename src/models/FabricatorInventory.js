@@ -6,6 +6,18 @@ const fabricatorInventorySchema = new mongoose.Schema({
   productId: { type: String, required: true, trim: true },
   description: { type: String, required: true, trim: true },
   quantity: { type: Number, required: true, min: 0, validate: Number.isSafeInteger },
+  productType: {
+    type: String,
+    enum: ['GLAZIA', 'OTHER'],
+    default: 'GLAZIA',
+    required: true
+  },
+
+  imageUrl: {
+    type: String,
+    default: '',
+    trim: true
+  }
 }, { timestamps: true });
 
 fabricatorInventorySchema.index({ fabricator: 1, productId: 1 }, { unique: true });
