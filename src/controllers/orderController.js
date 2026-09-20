@@ -6,6 +6,9 @@ const fs = require("fs");
 const { extractQueryParams, escapeRegExp } = require("../utils/common");
 const { sendNalcoMessageToUsers } = require("../utils/nalcoWhatsapp");
 const { consumeStock, addStock } = require("../services/dealershipInventoryService");
+const {
+  addDeliveredProductsToFabricatorInventory,
+} = require("../services/fabricatorInventoryService");
 
 const createOrder = async (req, res) => {
   const { products, payment, totalAmount, deliveryType, orderChannel, sourceOrderId,} = req.body;
@@ -82,11 +85,18 @@ orderChannel: isDealerGlaziaOrder
   ? "DEALER_DIRECT_FULFILLMENT"
   : "CUSTOMER",
 
+// inventoryDisposition: isDealerGlaziaOrder
+//   ? "ADD_TO_DEALER_STOCK"
+//   : isDealership
+//     ? "ADD_TO_DEALER_STOCK"
+//     : "NONE",
 inventoryDisposition: isDealerGlaziaOrder
   ? "ADD_TO_DEALER_STOCK"
   : isDealership
     ? "ADD_TO_DEALER_STOCK"
-    : "NONE",
+    : authenticatedUser.accountType === "FABRICATOR"
+      ? "DIRECT_TO_FABRICATOR"
+      : "NONE",
     sourceOrder: isDealerGlaziaOrder
   ? sourceOrderId
   : null,
@@ -536,6 +546,22 @@ const order = await UserOrder.findOne(orderQuery);
     order.isComplete = true;
     order.completedAt = new Date();
     order.updatedAt = new Date();
+    
+    // Add delivered products to fabricator inventory
+const fabricator = await User.findOne({
+  _id: order.user.userId,
+  accountType: "FABRICATOR",
+}).select("_id");
+
+if (fabricator && !order.fabricatorInventoryProcessedAt) {
+  await addDeliveredProductsToFabricatorInventory(
+    fabricator._id,
+    order.products,
+    order._id
+  );
+
+  order.fabricatorInventoryProcessedAt = new Date();
+}
 
     if (order.inventoryDisposition === "ADD_TO_DEALER_STOCK" && !order.inventoryProcessedAt) {
       await addStock(order.dealership || order.user.userId, order.products, order._id);
