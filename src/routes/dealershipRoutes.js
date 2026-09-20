@@ -9,6 +9,20 @@ const agreementUpload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, callback) => callback(file.mimetype === 'application/pdf' ? null : new Error('Only PDF files are allowed'), file.mimetype === 'application/pdf'),
 });
+const inventoryImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+
+    callback(
+      allowedTypes.includes(file.mimetype)
+        ? null
+        : new Error('Only JPG, PNG, and WEBP images are allowed'),
+      allowedTypes.includes(file.mimetype)
+    );
+  },
+});
 router.use(isUser);
 router.get('/fabricators', listFabricators);
 router.post('/fabricators', agreementUpload.single('paPdf'), registerFabricator);
@@ -18,8 +32,12 @@ router.get('/orders', listOrders);
 router.get('/orders/:orderId', getOrder);
 router.get('/inventory', getInventory);
 router.get('/stock-adjustment-requests', listAdjustmentRequests);
-router.post('/inventory', createInventoryItem);
-router.patch('/inventory/:productId', adjustInventory);
+router.post('/inventory', inventoryImageUpload.single('image'), createInventoryItem);
+router.patch(
+  '/inventory/:productId',
+  inventoryImageUpload.single('image'),
+  adjustInventory
+);
 router.delete('/inventory/:productId', deleteInventoryItem);
 router.patch('/orders/:orderId/fulfillment', decideFulfillment);
 
