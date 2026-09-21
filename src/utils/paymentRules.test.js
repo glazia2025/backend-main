@@ -62,3 +62,12 @@ test('rollout phone matching normalizes Indian country codes but never accepts p
   assert.equal(normalizeMobile('99999'), null);
   assert.equal(paysharpEnabled({ phoneNumber: '9999999999' }, { Paysharp_test_active: 'true', Paysharp_Test_users: '999999999' }), false);
 });
+
+test('common API root builds UPI paths for QR, intent and verification without VA configuration', async () => {
+  const urls = [];
+  const api = client({ PAYSHARP_TOKEN: 'test', PAYSHARP_BASE_URL: 'https://sandbox.paysharp.co.in/external/api/v1/' }, async config => {
+    urls.push(config.url); return { data: { code: 200, data: {} } };
+  });
+  for (const path of ['/order/intent', '/order/qrcode', '/order/test']) await api.request('upi', 'POST', path, {});
+  assert.deepEqual(urls, ['order/intent', 'order/qrcode', 'order/test'].map(path => `https://sandbox.paysharp.co.in/external/api/v1/upi/${path}`));
+});

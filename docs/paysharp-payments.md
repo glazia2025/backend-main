@@ -1,40 +1,45 @@
-# Paysharp order payments
+# Paysharp payments — UPI-only phase
 
-## Configuration and rollout
+## Deployment configuration
 
-All changed repositories use branch `feat/paysharp-order-payments`. No deployment or real payment is performed by the implementation/tests.
+Changes for this phase are on `feat/paysharp-upi-only` in backend-main, glazia-frontend and glazia-quotation. Deploy all three together. Tests do not make real payments.
 
-Set these **server-only** variables in the main backend's deployment environment or ignored `prod.env`:
+Set server-only variables in backend-main's hosting environment or ignored `prod.env`:
 
-- `PAYSHARP_TOKEN`: merchant API token from Paysharp. Never expose it as a frontend variable.
-- `PAYSHARP_UPI_BASE_URL`: complete UPI API base URL from Paysharp's environment configuration.
-- `PAYSHARP_VA_BASE_URL`: complete virtual-account API base URL from the same environment.
-- `QUOTATION_API_BASE_URL`: quotation backend used to reprice a saved BOM (default `https://quotation-api.glazia.in`).
+```env
+PAYSHARP_TOKEN=your_matching_environment_token
+# Shared root WITHOUT /upi or /order/intent. Sandbox example:
+PAYSHARP_BASE_URL=https://sandbox.paysharp.co.in/external/api/v1
+QUOTATION_API_BASE_URL=https://quotation-api.glazia.in
+Paysharp_test_active=True
+Paysharp_Test_users=your_selected_registered_mobile_numbers
+```
 
-Use matching sandbox credentials and endpoints first. The public references do not specify the full sandbox/production base URLs or webhook signatures. We do not guess them or invent a signature scheme. Each webhook is treated as an untrusted lookup hint and independently checked against Paysharp's authenticated status/transaction API. Never log Axios request configuration, tokens, or full webhook payloads.
+Use Paysharp's production root and matching production token for live payments. `PAYSHARP_BASE_URL` takes priority for UPI; the backend appends `/upi/order/intent`, `/upi/order/qrcode`, or `/upi/order/{id}`. Existing `PAYSHARP_UPI_BASE_URL` (including `/upi`) remains a compatibility fallback when the common root is unset. Token values exclude the `Bearer ` prefix. Restart backend-main after changing environment variables.
 
-MongoDB must support transactions (replica set or Atlas). New payment model indexes are initialized before the main backend starts accepting traffic. Payment data for sandbox and production must use separate databases; do not mix merchant environments in one ledger.
+No VA URL or VA webhook registration is required for this UPI phase. Checkout creates a local ledger, without calling Paysharp's customer/virtual-account APIs. Virtual-account provisioning through the account endpoint is disabled, and both apps hide VA account cards and bank details from Paysharp checkout.
 
-Configure two webhook URLs in Paysharp:
+Configure the UPI webhook:
 
-- `POST https://api.glazia.in/api/payments/webhooks/upi`
-- `POST https://api.glazia.in/api/payments/webhooks/virtual-account`
+```text
+POST https://api.glazia.in/api/payments/webhooks/upi
+```
 
-Both return HTTP 200 with `{"code":200,"message":"success"}` only after verification and durable handling. Transient verification/database failures return non-200 so Paysharp can retry. The VA reference documents four attempts at 15-minute intervals. Admins can recover a missed bank receipt using its Paysharp reference from the order payment panel. A UTR alone is not a Paysharp lookup key.
+Send JSON, without incoming authentication. The backend treats the payload as an untrusted lookup hint and independently verifies the order through Paysharp using its server token. It returns HTTP 200 with `{"code":200,"message":"success"}` after verification and durable handling. Verification/database errors return non-200. Customers can also use Check payment status to query Paysharp again.
 
-Deploy the quotation backend's `quotationId` addition, then main backend and the updated storefront, quotation UI, and admin together. Glazia admins can see all new Paysharp orders, including dealer-linked fabricator orders, because Glazia receives those payments. Updated checkout clients use the server-selected payment flow. Existing historical orders retain their manual-payment workflow with ownership checks; their payments are not silently converted to Paysharp receipts.
+Historical VA receipt webhook and admin reconciliation handlers remain for previously issued virtual accounts; they require the old `PAYSHARP_VA_BASE_URL` only if those historical payments need processing. They are not called during UPI checkout. Existing high-value Paysharp orders retain their payment provider and display a contact-Glazia message when UPI is unavailable; they are not silently converted to proof orders.
 
-## Business rules implemented
+MongoDB must support transactions (replica set or Atlas). Payment indexes initialize before serving traffic. Use separate databases for sandbox and production payment ledgers.
 
-- Below ₹1,00,000 including GST: UPI or virtual-account bank transfer.
-- ₹1,00,000 and above: bank transfer only. Exactly ₹1,00,000 uses bank transfer, consistently in the server and UI.
-- The threshold is the full order total, not the remaining balance. UPI's ₹1 provider minimum also applies to the remaining balance.
-- Full payment is required before fulfillment and dealer-stock consumption for Paysharp orders. Proof-based orders retain their previous manual review and stock flow.
-- Virtual accounts are provisioned idempotently on first access to payment details or checkout, using the stable Glazia user ID. Account details stay attached to that fabricator/dealership. The displayed beneficiary is the provider-returned Paysharp beneficiary.
-- Bank receipts apply to the account's oldest unpaid Paysharp order first; excess remains unapplied credit and is consumed by a future order. This was the proposed default pending a different allocation instruction.
-- UPI receipts prioritize the order that originated the UPI request; overpayment becomes account credit. Fees and net collected amount are recorded separately from the gross customer payment.
-- `AWAITING_PAYMENT`, `PARTIALLY_PAID`, and `PAID` are independent of shipment/completion.
-- An unpaid placed order remains payable in account order history. Closing checkout does not cancel the order.
+## Business rules
+
+- Eligible users with totals from ₹1 to below ₹1,00,000 including GST use Paysharp UPI (desktop QR or mobile intent).
+- New orders of ₹1,00,000 or more use the existing bank details and proof upload with manual approval during this phase. Amounts below ₹1 also use the legacy flow.
+- Rollout-excluded users retain their original QR/bank details and proof upload.
+- Both quote and order creation enforce the selected provider server-side; stale or tampered selections return a conflict.
+- Full payment is required before fulfillment and dealer-stock consumption for Paysharp orders. Legacy orders retain their existing manual review and stock behavior.
+- UPI receipts prioritize the originating order. Existing unapplied credits remain usable. Gross amounts, fees and net amounts are recorded separately.
+- Payment status is independent of shipping/completion. Closing checkout leaves the saved order available in order history.
 
 ## Implementation
 
@@ -44,7 +49,7 @@ The storefront sends product identifiers and quantities; main backend loads curr
 
 Collections:
 
-- `paymentaccounts`: virtual bank details, unapplied credit, and per-customer serialization revision.
+- `paymentaccounts`: local payment ledger (with optional historical virtual bank details), unapplied credit, and per-customer serialization revision.
 - `paymentattempts`: durable UPI request IDs, amount, QR/intent, provider status. One active attempt per order; terminal attempts are retained when retrying.
 - `paymentreceipts`: unique Paysharp reference, gross/fee/net values in integer paise, UTR, date, order allocations and unapplied remainder.
 - Existing `userorders`: server-calculated totals, paid amount/status, quotation reference, payment receipt summaries, and existing fulfillment data.
@@ -55,20 +60,11 @@ A receipt, its allocations, order status, and stock effects commit atomically. C
 
 - `npm test`: existing backend regression suite.
 - `npm run test:payments`: isolated MongoDB replica-set integration suite with a mocked Paysharp API. It downloads a MongoDB test binary on first run and requires permission to bind localhost ports. It does not connect to deployment databases or send real payments.
-- Complete merchant sandbox acceptance before live deployment: account provisioning, QR and mobile intent payments, bank transfer notification, duplicates, delayed notification recovery, and dealer shortage replenishment.
+- Complete merchant sandbox acceptance before live deployment: QR and mobile intent payments with no VA configuration, duplicate notifications, delayed notification recovery, legacy high-value checkout, and dealer shortage replenishment.
 
 Provider references:
 - https://www.paysharp.in/developer/api/v1/upi/reference
 - https://www.paysharp.in/developer/api/v1/virtual-account/reference
-
-### Local verification results
-
-- 20 backend unit/regression tests pass.
-- 21 isolated payment integration tests pass, including failure rollback and the complete dealer-shortage flow.
-- Quotation frontend typecheck passes.
-- Admin production build passes (existing lint warnings remain). Generated build output was restored; source changes are the deliverable.
-- Storefront checkout lint passes. The full storefront typecheck has 126 errors, identical to the starting revision after normalizing line numbers. No new TypeScript diagnostics were introduced.
-- Live/sandbox Paysharp acceptance is pending merchant configuration. All provider calls in integration tests are mocked.
 
 ## Controlled rollout
 
@@ -79,8 +75,8 @@ Paysharp_test_active=True
 Paysharp_Test_users=9999999999,8888888888
 ```
 
-`True` restricts new Paysharp checkout and virtual-account provisioning to users whose **registered primary or additional mobile** matches the list. Everyone else sees the existing Glazia bank/QR details and uploads payment proof for manual approval. `False` enables Paysharp for all eligible users regardless of the list. Values are case-insensitive. An omitted flag preserves the prior all-user Paysharp behavior; an invalid non-boolean value enables it for nobody. An empty list with `True` means everyone uses proof upload. Indian `+91` and leading-zero formats are normalized; partial numbers never match.
+`True` restricts new Paysharp UPI checkout to users whose **registered primary or additional mobile** matches the list. Everyone else sees the existing Glazia bank/QR details and uploads payment proof for manual approval. `False` enables Paysharp UPI for all eligible users regardless of the list. Orders of ₹1,00,000 or more (or below the ₹1 UPI minimum) still use proof upload in this phase. Values are case-insensitive. An omitted flag preserves the prior all-user Paysharp behavior; an invalid non-boolean value enables it for nobody. An empty list with `True` means everyone uses proof upload. Indian `+91` and leading-zero formats are normalized; partial numbers never match.
 
 Restart the main backend after changing deployment environment variables. No frontend environment variables or phone lists are needed. `GET /api/payments/config` returns only the authenticated account's selected provider, never the allowlist. Both apps use `/api/payments/quote` to obtain server-priced checkout and its selected provider. The server rechecks eligibility when creating an order and rejects stale checkout modes. Proof uploads are required and validated for excluded accounts, without any Paysharp API call. Existing order IDs always retain their original payment method when the switch/list changes; receipt webhooks and existing Paysharp orders remain serviceable.
 
-This controls exposure on your existing environment; it does not change Paysharp API endpoints, credentials, or transaction environment. Keep the selected token and base URLs consistent.
+This controls exposure on your existing environment; it does not change Paysharp API endpoints, credentials, or transaction environment. Keep the selected token and base URL consistent.

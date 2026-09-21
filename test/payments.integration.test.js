@@ -66,7 +66,9 @@ async function checkout(quantity = 1, key = 'checkout_test_00001') {
   assert.equal(result.status, 201, JSON.stringify(result));
   return result.data.order;
 }
-function bank(amount, reference = 'BANK001', user = customer) {
+async function bank(amount, reference = 'BANK001', user = customer) {
+  // Historical VA fixture: only bank-payment tests provision an account.
+  await service.ensureAccount(user);
   const data = { externalCustomerId: String(user._id), virtualAccountNo: `VA${user._id}`, amount, totalFee: 5, netAmount: amount - 5, paysharpReferenceNo: reference, utrNumber: `UTR_${reference}`, transactionDate: new Date().toISOString() };
   remote.set(`/transactions/${reference}`, data); return data;
 }
@@ -82,10 +84,12 @@ test('server prices ignore browser amounts, and checkout retries create one orde
 });
 test('₹1,00,000 boundary is based on full order total, even after partial payment', async () => {
   assert.equal(upiAllowed(9999999), true); assert.equal(upiAllowed(10000000), false); assert.equal(upiAllowed(10000001), false);
-  const order = await checkout(100);
+  // Existing high-value Paysharp orders keep their original payment rules.
+  const order = await checkout();
+  await UserOrder.updateOne({ _id: order._id }, { totalPaise: 11800000, totalAmount: 118000 });
   const response = await api(`/api/payments/orders/${order._id}/upi`, {});
   assert.equal(response.status, 400);
-  await service.recordReceipt(bank(117000), 'BANK_TRANSFER');
+  await service.recordReceipt(await bank(117000), 'BANK_TRANSFER');
   assert.equal((await api(`/api/payments/orders/${order._id}/upi`, {})).status, 400);
 });
 test('orders between ₹50,000 and ₹1,00,000 now allow UPI', async () => {
@@ -94,7 +98,7 @@ test('orders between ₹50,000 and ₹1,00,000 now allow UPI', async () => {
   assert.equal((await api(`/api/payments/orders/${order._id}/upi`, {})).status, 200);
 });
 test('bank webhook uses provider data, deduplicates concurrent delivery and keeps fees separate', async () => {
-  const order = await checkout(); bank(1180);
+  const order = await checkout(); await bank(1180);
   const responses = await Promise.all([1, 2, 3].map(() => api('/api/payments/webhooks/virtual-account', { paysharpReferenceNo: 'BANK001', amount: 99999999, externalCustomerId: 'forged' }, null)));
   responses.forEach(response => assert.equal(response.status, 200, JSON.stringify(response)));
   const saved = await UserOrder.findById(order._id);
@@ -104,10 +108,10 @@ test('bank webhook uses provider data, deduplicates concurrent delivery and keep
 });
 test('partial receipts allocate FIFO and excess credits a future order', async () => {
   const first = await checkout(1, 'checkout_first_0001'); const second = await checkout(1, 'checkout_second_0001');
-  await service.recordReceipt(bank(500), 'BANK_TRANSFER');
+  await service.recordReceipt(await bank(500), 'BANK_TRANSFER');
   assert.equal((await UserOrder.findById(first._id)).paymentStatus, 'PARTIALLY_PAID');
   assert.equal((await UserOrder.findById(second._id)).paidPaise, 0);
-  await service.recordReceipt(bank(3000, 'BANK002'), 'BANK_TRANSFER');
+  await service.recordReceipt(await bank(3000, 'BANK002'), 'BANK_TRANSFER');
   assert.equal((await PaymentAccount.findOne()).creditPaise, 114000);
   const third = await checkout(1, 'checkout_third_0001');
   assert.equal(third.paidPaise, 114000); assert.equal(third.paymentStatus, 'PARTIALLY_PAID');
@@ -132,7 +136,7 @@ test('wrong customer / amount / account confirmations cannot credit an order', a
   const attempt = await PaymentAttempt.findOne(); const path = `/order/${attempt._id}`;
   remote.set(path, { ...remote.get(path), status: 'SUCCESS', amount: 1, utrNumber: 'WRONG', transactionDate: new Date().toISOString() });
   assert.equal((await api('/api/payments/webhooks/upi', { orderId: String(attempt._id) }, null)).status, 409);
-  const data = bank(1180); remote.set('/transactions/BANK001', { ...data, virtualAccountNo: 'WRONG' });
+  const data = await bank(1180); remote.set('/transactions/BANK001', { ...data, virtualAccountNo: 'WRONG' });
   assert.equal((await api('/api/payments/webhooks/virtual-account', { paysharpReferenceNo: 'BANK001' }, null)).status, 409);
   assert.equal(await PaymentReceipt.countDocuments(), 0);
 });
@@ -150,8 +154,8 @@ test('dealer stock is consumed only when fully paid; duplicate notifications can
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 10 });
   const order = await checkout(2);
   assert.equal((await DealershipInventory.findOne()).quantity, 10);
-  await service.recordReceipt(bank(2360), 'BANK_TRANSFER');
-  await service.recordReceipt(bank(2360), 'BANK_TRANSFER');
+  await service.recordReceipt(await bank(2360), 'BANK_TRANSFER');
+  await service.recordReceipt(await bank(2360), 'BANK_TRANSFER');
   assert.equal((await DealershipInventory.findOne()).quantity, 8);
   assert.equal((await UserOrder.findById(order._id)).fulfillment.status, 'DEALER_STOCK');
   assert.equal(await InventoryMovement.countDocuments(), 1);
@@ -161,7 +165,7 @@ test('completion requires paid status and stock additions happen once', async ()
   const order = await checkout();
   const documents = { biltyDoc: 'doc', eWayBill: 'doc', taxInvoice: 'doc', driverInfo: { name: 'Driver', phone: '9999999999' } };
   await assert.rejects(completePaidOrder(order._id, documents), /Full payment/);
-  await service.recordReceipt(bank(1180), 'BANK_TRANSFER');
+  await service.recordReceipt(await bank(1180), 'BANK_TRANSFER');
   await completePaidOrder(order._id, documents);
   await assert.rejects(completePaidOrder(order._id, documents), /already complete/);
   assert.equal((await DealershipInventory.findOne()).quantity, 1);
@@ -174,7 +178,7 @@ test('inventory-write failure rolls back receipt, payment balance, and stock bef
   const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
   await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 3 });
-  const order = await checkout(); const data = bank(1180);
+  const order = await checkout(); const data = await bank(1180);
   const originalInsert = InventoryMovement.insertMany;
   InventoryMovement.insertMany = async () => { throw new Error('simulated ledger-write failure'); };
   try { await assert.rejects(service.recordReceipt(data, 'BANK_TRANSFER'), /simulated/); }
@@ -191,7 +195,7 @@ test('shortage purchase links once, replenishes dealer inventory and releases or
   await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 1 });
   const original = await checkout(3);
-  await service.recordReceipt(bank(3540), 'BANK_TRANSFER');
+  await service.recordReceipt(await bank(3540), 'BANK_TRANSFER');
   assert.equal((await UserOrder.findById(original._id)).fulfillment.remainingProducts[0].quantity, 2);
   const dealerToken = signJwt({ role: 'user', userId: String(dealer._id) });
   const body = { sourceOrderId: original._id, checkoutKey: 'dealer_shortage_0001', expectedTotalPaise: 236000 };
@@ -202,7 +206,7 @@ test('shortage purchase links once, replenishes dealer inventory and releases or
   assert.equal(duplicate.status, 409); assert.equal(await UserOrder.countDocuments(), 2);
   const documents = { biltyDoc: 'doc', eWayBill: 'doc', taxInvoice: 'doc', driverInfo: { name: 'Driver', phone: '9999999999' } };
   await assert.rejects(completePaidOrder(original._id, documents), /shortage order/);
-  await service.recordReceipt(bank(2360, 'DEALER_BANK', dealer), 'BANK_TRANSFER');
+  await service.recordReceipt(await bank(2360, 'DEALER_BANK', dealer), 'BANK_TRANSFER');
   await completePaidOrder(first.data.order._id, documents);
   assert.equal((await DealershipInventory.findOne()).quantity, 2);
   await completePaidOrder(original._id, documents);
@@ -246,7 +250,7 @@ test('quotation checkout fetches authoritative BOM and stores quotation linkage'
   } finally { axios.get = originalGet; }
 });
 test('manual payment endpoints cannot edit a Paysharp receipt', async () => {
-  const order = await checkout(); await service.recordReceipt(bank(1180), 'BANK_TRANSFER');
+  const order = await checkout(); await service.recordReceipt(await bank(1180), 'BANK_TRANSFER');
   const saved = await UserOrder.findById(order._id);
   const legacy = require('../src/controllers/orderController');
   for (const fn of [legacy.approvePayment, legacy.updatePaymentDueDate, legacy.uploadPaymentProof, legacy.createPayment]) {
@@ -258,7 +262,7 @@ test('manual payment endpoints cannot edit a Paysharp receipt', async () => {
   assert.equal((await UserOrder.findById(order._id)).paidPaise, 118000);
 });
 test('UPI amounts below provider minimum are rejected after a partial bank receipt', async () => {
-  const order = await checkout(); await service.recordReceipt(bank(1179.99), 'BANK_TRANSFER');
+  const order = await checkout(); await service.recordReceipt(await bank(1179.99), 'BANK_TRANSFER');
   const result = await api(`/api/payments/orders/${order._id}/upi`, {});
   assert.equal(result.status, 400);
   assert.match(result.data.message, /at least ₹1/);
@@ -310,7 +314,7 @@ test('merged fabricator delivery updates inventory once when a Paysharp order co
   const order = await checkout();
   const FabricatorInventory = require('../src/models/FabricatorInventory');
   assert.equal(await FabricatorInventory.countDocuments(), 0);
-  await service.recordReceipt(bank(1180), 'BANK_TRANSFER');
+  await service.recordReceipt(await bank(1180), 'BANK_TRANSFER');
   assert.equal(await FabricatorInventory.countDocuments(), 0);
   const documents = { biltyDoc: 'doc', eWayBill: 'doc', taxInvoice: 'doc', driverInfo: { name: 'Driver', phone: '9999999999' } };
   await completePaidOrder(order._id, documents);
@@ -319,4 +323,38 @@ test('merged fabricator delivery updates inventory once when a Paysharp order co
   assert.ok((await UserOrder.findById(order._id)).fabricatorInventoryProcessedAt);
   await assert.rejects(completePaidOrder(order._id, documents), /already complete/);
   assert.equal((await FabricatorInventory.findById(item._id)).quantity, 1);
+});
+
+test('UPI-only checkout creates a local ledger and QR/intent without any VA calls', async () => {
+  for (const kind of ['qr', 'intent']) {
+    const order = await checkout(1, `upi_only_checkout_${kind}`);
+    assert.equal(calls.filter(call => call.kind === 'va').length, 0);
+    const account = await PaymentAccount.findOne({ user: customer._id });
+    assert.ok(account); assert.equal(account.virtualAccountNo, undefined);
+    const response = await api(`/api/payments/orders/${order._id}/upi`, { kind });
+    assert.equal(response.status, 200, JSON.stringify(response));
+    assert.ok(kind === 'qr' ? response.data.qrCode : response.data.intentUrl);
+    const attempt = await PaymentAttempt.findOne({ order: order._id });
+    const data = remote.get(`/order/${attempt._id}`);
+    remote.set(`/order/${attempt._id}`, { ...data, status: 'SUCCESS', utrNumber: `UTR_${kind}`, transactionDate: new Date().toISOString() });
+    const result = await api('/api/payments/webhooks/upi', { orderId: String(attempt._id), amount: 1 }, null);
+    assert.equal(result.status, 200, JSON.stringify(result));
+    assert.equal((await UserOrder.findById(order._id)).paymentStatus, 'PAID');
+  }
+  assert.equal((await api('/api/payments/account')).status, 403);
+  assert.equal((await api('/api/payments/config')).data.virtualAccountEnabled, false);
+  assert.equal(calls.some(call => call.kind === 'va'), false);
+});
+
+test('high-value checkout uses proof upload and rejects forcing Paysharp', async () => {
+  const body = { products: [{ productId: 'HW1', quantity: 100 }] };
+  const quote = await api('/api/payments/quote', body);
+  assert.equal(quote.data.paymentProvider, 'LEGACY');
+  const request = { ...body, expectedTotalPaise: quote.data.totalPaise, checkoutKey: 'high_value_checkout_01' };
+  assert.equal((await api('/api/user/pi-generate', { ...request, paymentProvider: 'PAYSHARP' })).status, 409);
+  assert.equal((await api('/api/user/pi-generate', { ...request, paymentProvider: 'LEGACY' })).status, 400);
+  const response = await api('/api/user/pi-generate', { ...request, paymentProvider: 'LEGACY', payment: { proof: 'data:image/png;base64,aGVsbG8=' } });
+  assert.equal(response.status, 201, JSON.stringify(response));
+  assert.equal(response.data.order.paymentProvider, 'LEGACY');
+  assert.equal(calls.length, 0); assert.equal(await PaymentAccount.countDocuments(), 0);
 });

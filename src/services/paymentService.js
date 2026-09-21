@@ -6,6 +6,17 @@ const provider = require('./paysharpClient');
 const { fail, paise, rupees, upiAllowed } = require('../utils/paymentRules');
 const { consumeStock } = require('./dealershipInventoryService');
 
+// Local ledger only: UPI customer IDs do not require virtual-account provisioning.
+async function ensureLedger(user) {
+  try {
+    return await PaymentAccount.findOneAndUpdate({ user: user._id },
+      { $setOnInsert: { externalCustomerId: String(user._id) } }, { upsert: true, new: true });
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    return PaymentAccount.findOne({ user: user._id });
+  }
+}
+
 async function ensureAccount(user) {
   let account = await PaymentAccount.findOne({ user: user._id });
   if (account?.virtualAccountNo) return account;
@@ -115,7 +126,7 @@ async function verifyBank(reference) {
 async function createUpi(order, user, kind = 'qr') {
   if (!['qr', 'intent'].includes(kind)) throw fail('Invalid UPI payment method');
   if (!upiAllowed(order.totalPaise)) throw fail('Orders of ₹1,00,000 or more require bank transfer');
-  if (order.totalPaise - order.paidPaise < 100) throw fail('UPI requires at least ₹1 outstanding. Please use bank transfer.');
+  if (order.totalPaise - order.paidPaise < 100) throw fail('UPI requires at least ₹1 outstanding. Please contact Glazia.');
   if (order.paymentStatus === 'PAID') throw fail('This order is already paid', 409);
   let attempt = await PaymentAttempt.findOne({ order: order._id, active: true });
   if (attempt && ['FAILED', 'EXPIRED'].includes(attempt.status)) {
@@ -141,9 +152,9 @@ async function createUpi(order, user, kind = 'qr') {
     await verifyUpi(attempt);
     attempt = await PaymentAttempt.findById(attempt._id);
     if (attempt.status === 'SUCCESS') return attempt;
-    if (['FAILED', 'EXPIRED'].includes(attempt.status)) throw fail('This UPI request has ended. Please use your virtual account bank details.', 409);
+    if (['FAILED', 'EXPIRED'].includes(attempt.status)) throw fail('This UPI request has ended. Please retry the UPI payment.', 409);
     if (attempt.qrCode || attempt.intentUrl) return attempt;
-    throw fail('UPI request exists but its QR is unavailable. Please use bank transfer or contact Glazia.', 409);
+    throw fail('UPI request exists but its QR is unavailable. Please contact Glazia.', 409);
   } catch (error) {
     if (Number(error.providerCode) !== 6002) throw error;
   }
@@ -158,4 +169,4 @@ async function createUpi(order, user, kind = 'qr') {
   return attempt;
 }
 const accountView = (account) => ({ virtualAccountNo: account.virtualAccountNo, ifscCode: account.ifscCode, beneficiaryName: account.beneficiaryName, bankName: account.bankName, creditPaise: account.creditPaise });
-module.exports = { ensureAccount, allocateCredit, recordReceipt, verifyUpi, verifyBank, createUpi, accountView };
+module.exports = { ensureLedger, ensureAccount, allocateCredit, recordReceipt, verifyUpi, verifyBank, createUpi, accountView };

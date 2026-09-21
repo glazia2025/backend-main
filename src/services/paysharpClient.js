@@ -1,7 +1,10 @@
 const axios = require('axios');
 const { fail } = require('../utils/paymentRules');
 const request = async (kind, method, path, data) => {
-  const base = process.env[kind === 'upi' ? 'PAYSHARP_UPI_BASE_URL' : 'PAYSHARP_VA_BASE_URL'];
+  // The common root excludes /upi. Keep previous variables for existing deployments.
+  const base = kind === 'upi' && process.env.PAYSHARP_BASE_URL
+    ? `${process.env.PAYSHARP_BASE_URL.replace(/\/$/, '')}/upi`
+    : process.env[kind === 'upi' ? 'PAYSHARP_UPI_BASE_URL' : 'PAYSHARP_VA_BASE_URL'];
   const token = process.env.PAYSHARP_TOKEN;
   if (!base || !token) throw fail('Payments are not configured. Please contact Glazia.', 503);
   if (new URL(base).protocol !== 'https:') throw fail('Paysharp requires an HTTPS API URL', 503);

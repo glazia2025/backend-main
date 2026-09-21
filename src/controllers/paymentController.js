@@ -27,20 +27,20 @@ const ownedOrder = async req => {
   if (!order) throw fail('Order not found', 404);
   return order;
 };
+const upiCheckoutEnabled = (user, totalPaise) => paysharpEnabled(user) && totalPaise >= 100 && upiAllowed(totalPaise);
 const summary = order => ({ paymentProvider: order.paymentProvider || 'LEGACY', _id: order._id, orderId: order.orderId, totalPaise: order.totalPaise, paidPaise: order.paidPaise,
   paymentStatus: order.paymentStatus, upiAllowed: upiAllowed(order.totalPaise) && order.totalPaise - order.paidPaise >= 100, isComplete: order.isComplete });
 exports.config = wrap(async (req, res) => {
-  res.json({ paymentProvider: paysharpEnabled(await buyer(req)) ? 'PAYSHARP' : 'LEGACY' });
+  res.json({ paymentProvider: paysharpEnabled(await buyer(req)) ? 'PAYSHARP' : 'LEGACY', virtualAccountEnabled: false });
 });
 exports.account = wrap(async (req, res) => {
-  const user = await buyer(req);
-  if (!paysharpEnabled(user)) throw fail('Paysharp is not enabled for this account', 403);
-  res.json(payments.accountView(await payments.ensureAccount(user)));
+  await buyer(req);
+  throw fail('Virtual-account payments are not available during the UPI-only rollout', 403);
 });
 exports.quote = wrap(async (req, res) => {
   const user = await buyer(req);
   const pricing = await priceOrder(req.body, user, extractAuthToken(req));
-  res.json({ ...pricing, paymentProvider: paysharpEnabled(user) ? 'PAYSHARP' : 'LEGACY', upiAllowed: upiAllowed(pricing.totalPaise) });
+  res.json({ ...pricing, paymentProvider: upiCheckoutEnabled(user, pricing.totalPaise) ? 'PAYSHARP' : 'LEGACY', upiAllowed: upiAllowed(pricing.totalPaise) });
 });
 exports.createOrder = wrap(async (req, res) => {
   const user = await buyer(req);
@@ -54,7 +54,7 @@ exports.createOrder = wrap(async (req, res) => {
   }
   const pricing = await priceOrder(req.body, user, extractAuthToken(req));
   if (pricing.totalPaise !== req.body.expectedTotalPaise) throw fail('Prices have changed. Review the updated total and try again.', 409);
-  const enabled = paysharpEnabled(user);
+  const enabled = upiCheckoutEnabled(user, pricing.totalPaise);
   const mode = enabled ? 'PAYSHARP' : 'LEGACY';
   if (req.body.paymentProvider && req.body.paymentProvider !== mode) throw fail('Payment options have changed. Review checkout and try again.', 409);
   const proof = req.body.payment?.proof;
@@ -62,7 +62,7 @@ exports.createOrder = wrap(async (req, res) => {
   if (!enabled && (typeof proof !== 'string' || !/^data:(image\/(png|jpeg|webp)|application\/pdf);base64,[A-Za-z0-9+/]+={0,2}$/.test(proof) || Buffer.byteLength(proof.split(',')[1] || '', 'base64') > 5 * 1024 * 1024)) {
     throw fail('Upload a PNG, JPEG, WebP image or PDF payment proof up to 5 MB');
   }
-  const account = enabled ? await payments.ensureAccount(user) : null;
+  const account = enabled ? await payments.ensureLedger(user) : null;
   let result;
   await mongoose.connection.transaction(async session => {
     const locked = account ? await PaymentAccount.findOneAndUpdate({ _id: account._id }, { $inc: { revision: 1 } }, { session, new: true }) : null;
