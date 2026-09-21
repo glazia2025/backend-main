@@ -48,7 +48,6 @@ app.use(
 );
 app.use(express.json({ extended: false, limit: JSON_BODY_LIMIT }));
 
-connectDB();
 
 const authRoutes = require("./routes/authRoutes");
 const adminRoutes = require("./routes/admin-form");
@@ -59,6 +58,7 @@ const dealershipRoutes = require("./routes/dealershipRoutes");
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/user", userRoutes);
+app.use("/api/payments", require("./routes/paymentRoutes"));
 app.use("/api/profile", profileRoutes);
 app.use("/api/dealership", dealershipRoutes);
 app.use("/api/blogs", blogRoutes);
@@ -78,6 +78,12 @@ app.use((error, req, res, next) => {
   return next(error);
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Glazia main backend running on http://localhost:${PORT}`);
-});
+async function start() {
+  await connectDB();
+  await Promise.all(Object.values(require('./models/Payment')).map(model => model.init()));
+  await require('./models/Order').UserOrder.init();
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Glazia main backend running on http://localhost:${PORT}`);
+  });
+}
+start().catch(() => { console.error('Unable to initialize payment storage'); process.exit(1); });

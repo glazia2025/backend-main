@@ -9,7 +9,8 @@
     "build": "npm run check",
     "check": "node --check src/server.js",
     "test": "node --test src/utils/*.test.js",
-    "admin:bootstrap": "node scripts/bootstrap-admin.js"
+    "admin:bootstrap": "node scripts/bootstrap-admin.js",
+    "test:payments": "node --test test/payments.integration.test.js"
   },
   "keywords": [],
   "author": "",
@@ -38,6 +39,7 @@
     "twilio": "^5.4.2"
   },
   "devDependencies": {
+    "mongodb-memory-server": "10.1.4",
     "nodemon": "^3.1.9"
   }
 }

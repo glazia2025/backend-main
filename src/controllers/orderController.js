@@ -7,160 +7,7 @@ const { extractQueryParams, escapeRegExp } = require("../utils/common");
 const { sendNalcoMessageToUsers } = require("../utils/nalcoWhatsapp");
 const { consumeStock, addStock } = require("../services/dealershipInventoryService");
 
-const createOrder = async (req, res) => {
-  const { products, payment, totalAmount, deliveryType, orderChannel, sourceOrderId,} = req.body;
-  if (
-    !products ||
-    !Array.isArray(products) ||
-    products.length === 0 ||
-    !payment ||
-    !payment.amount ||
-    !payment.proof ||
-    !totalAmount ||
-    products.some((product) => !product.productId || !Number.isFinite(Number(product.quantity)) || Number(product.quantity) <= 0)
-  ) {
-    return res
-      .status(400)
-      .json({ message: "Please select products to proceed" });
-  }
-
-  try {
-    const authenticatedUser = req.user?.userId
-      ? await User.findById(req.user.userId).lean()
-      : req.user?.phoneNumber
-        ? await User.findOne({
-          $or: [
-            { phoneNumber: req.user.phoneNumber },
-            { phoneNumbers: req.user.phoneNumber },
-          ],
-        }).lean()
-        : null;
-
-    if (!authenticatedUser) {
-      return res.status(400).json({
-        message: "Authenticated user profile could not be found. Please log in again.",
-      });
-    }
-
-    const orderUser = {
-      userId: authenticatedUser._id,
-      name: authenticatedUser.name,
-      city: authenticatedUser.city,
-      phoneNumber: authenticatedUser.phoneNumber,
-    };
-
-    const isDealership = authenticatedUser.accountType === "DEALERSHIP";
-    const isDealerGlaziaOrder =
-  isDealership &&
-  orderChannel === "DEALER_DIRECT_FULFILLMENT" && sourceOrderId;
-    const assignedDealership = authenticatedUser.dealership || (isDealership ? authenticatedUser._id : null);
-
-    const newOrder = new UserOrder({
-      user: orderUser,
-      products,
-      payments: [
-        {
-          amount: payment.amount,
-          proof: payment.proof,
-          proofAdded: true,
-          cycle: 1,
-          isApproved: false,
-        },
-      ],
-      totalAmount,
-      deliveryType,
-      dealership: assignedDealership,
-      fulfillment: {
-  status: isDealerGlaziaOrder
-    ? "GLAZIA_DIRECT"
-    : authenticatedUser.dealership
-      ? "AWAITING_DEALER"
-      : "GLAZIA_DIRECT",
-},
-
-orderChannel: isDealerGlaziaOrder
-  ? "DEALER_DIRECT_FULFILLMENT"
-  : "CUSTOMER",
-
-inventoryDisposition: isDealerGlaziaOrder
-  ? "ADD_TO_DEALER_STOCK"
-  : isDealership
-    ? "ADD_TO_DEALER_STOCK"
-    : "NONE",
-    sourceOrder: isDealerGlaziaOrder
-  ? sourceOrderId
-  : null,
-
-      deliveryAddress: {
-        name: authenticatedUser.name,
-        phoneNumber: authenticatedUser.phoneNumber,
-        address: authenticatedUser.address,
-        city: authenticatedUser.city,
-        state: authenticatedUser.state,
-        pincode: authenticatedUser.pincode,
-      },
-    });
-    const savedOrder = await newOrder.save();
-
-    if (authenticatedUser.dealership && !isDealerGlaziaOrder) {
-  const stockResult = await consumeStock(
-    authenticatedUser.dealership,
-    products,
-    savedOrder._id
-  );
-
-  if (stockResult.fulfilledFromStock) {
-    savedOrder.fulfillment.status = "DEALER_STOCK";
-    savedOrder.fulfillment.decidedAt = new Date();
-    savedOrder.fulfillment.decidedBy = authenticatedUser.dealership;
-    savedOrder.inventoryDisposition = "CONSUMED_FROM_DEALER_STOCK";
-    savedOrder.fulfillment.remainingProducts = [];
-  } else {
-    savedOrder.fulfillment.status = "GLAZIA_VIA_DEALER";
-    savedOrder.fulfillment.decidedAt = new Date();
-    savedOrder.fulfillment.decidedBy = authenticatedUser.dealership;
-
-    if (stockResult.consumedProducts.length > 0) {
-      savedOrder.inventoryDisposition = "CONSUMED_FROM_DEALER_STOCK";
-    }
-    savedOrder.fulfillment.remainingProducts =
-  stockResult.remainingProducts;
-  }
-
-  await savedOrder.save();
-}
-    if (isDealerGlaziaOrder) {
-  if (!mongoose.isValidObjectId(sourceOrderId)) {
-    return res.status(400).json({
-      message: "Invalid source order ID",
-    });
-  }
-
-  const sourceOrder = await UserOrder.findOne({
-    _id: sourceOrderId,
-    dealership: authenticatedUser._id,
-    "fulfillment.status": "GLAZIA_VIA_DEALER",
-  });
-
-  if (!sourceOrder) {
-    return res.status(404).json({
-      message: "Original dealership order not found",
-    });
-  }
-
-  sourceOrder.upstreamOrder = savedOrder._id;
-  await sourceOrder.save();
-}
-
-    res.status(201).json({
-      message: "Order created successfully.",
-      order: savedOrder,
-    });
-  } catch (error) {
-    console.error("Error creating order:", error);
-    res.status(500).json({ message: "Internal server error." });
-  }
-};
+const createOrder = require('./paymentController').createOrder;
 
 const getOrders = async (req, res) => {
   try {
@@ -189,9 +36,11 @@ if (user && user.role === "admin") {
     dealership: { $ne: null },
   }).select("_id");
 
-  query["user.userId"] = {
-    $nin: dealershipFabricators.map((fabricator) => fabricator._id),
-  };
+  // Glazia collects all new Paysharp receipts, including dealer-linked fabricators.
+  query.$and = [{ $or: [
+    { paymentProvider: 'PAYSHARP' },
+    { 'user.userId': { $nin: dealershipFabricators.map(fabricator => fabricator._id) } },
+  ] }];
 }
 
     if (filters.orderType && filters.orderType === "ongoing") {
@@ -275,6 +124,12 @@ const createPayment = async (req, res) => {
       });
     }
 
+    if (order.paymentProvider === "PAYSHARP") {
+      return res.status(409).json({ message: "Paysharp payments are verified automatically; manual changes are disabled." });
+    }
+    if (req.user.role !== "admin" && String(order.user.userId) !== String(req.user.userId)) {
+      return res.status(403).json({ message: "This order belongs to another account." });
+    }
     if (order.isComplete) {
       return res.status(409).json({ message: "Order is already completed." });
     }
@@ -339,6 +194,9 @@ const order = await UserOrder.findOne(orderQuery);
       });
     }
 
+    if (order.paymentProvider === 'PAYSHARP') {
+      return res.status(409).json({ message: 'Paysharp payments are verified automatically; manual changes are disabled.' });
+    }
     const payment = order.payments.find(
       (el) => el._id.toString() === paymentId.toString()
     );
@@ -429,6 +287,9 @@ const order = await UserOrder.findOne(orderQuery);
       });
     }
 
+    if (order.paymentProvider === 'PAYSHARP') {
+      return res.status(409).json({ message: 'Paysharp payments are verified automatically; manual changes are disabled.' });
+    }
     const payment = order.payments.find(
       (el) => el._id.toString() === paymentId.toString()
     );
@@ -490,6 +351,15 @@ const order = await UserOrder.findOne(orderQuery);
       return res.status(400).json({
         message: "Order cannot be found.",
       });
+    }
+
+    if (order.paymentProvider === 'PAYSHARP') {
+      try {
+        const updated = await require('../services/completePaidOrder').completePaidOrder(order._id, req.body);
+        return res.json({ message: 'Order completed successfully.', order: updated });
+      } catch (error) {
+        return res.status(error.status || 500).json({ message: error.status ? error.message : 'Unable to complete order' });
+      }
     }
 
     if (order.isComplete) {
@@ -676,6 +546,12 @@ const uploadPaymentProof = async (req, res) => {
       });
     }
 
+    if (order.paymentProvider === "PAYSHARP") {
+      return res.status(409).json({ message: "Paysharp payments are verified automatically; manual changes are disabled." });
+    }
+    if (req.user.role !== "admin" && String(order.user.userId) !== String(req.user.userId)) {
+      return res.status(403).json({ message: "This order belongs to another account." });
+    }
     const payment = order.payments.find(
       (el) => el._id.toString() === paymentId.toString()
     );

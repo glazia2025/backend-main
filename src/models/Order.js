@@ -25,6 +25,7 @@ const orderSchema = new mongoose.Schema({
 
 // Define the payment shema
 const paymentSchema = new mongoose.Schema({
+  provider: String, method: String, reference: String, utr: String, receivedAt: Date,
   amount: { type: Number, required: true },
   cycle: { type: Number, required: true },
   proof: { type: String, required: false },
@@ -43,6 +44,12 @@ const userOrderSchema = new mongoose.Schema(
     products: { type: [orderSchema], required: true },
     payments: [{ type: paymentSchema }],
     totalAmount: { type: Number, required: false },
+    paymentProvider: { type: String, enum: ['PAYSHARP'] },
+    paymentStatus: { type: String, enum: ['AWAITING_PAYMENT', 'PARTIALLY_PAID', 'PAID'] },
+    totalPaise: Number, subtotalPaise: Number, taxPaise: Number,
+    paidPaise: { type: Number, default: 0 }, paymentActivatedAt: Date,
+    checkoutKey: String, checkoutFingerprint: String,
+    quotationId: { type: mongoose.Schema.Types.ObjectId }, quotationCode: String,
     biltyDoc: { type: String },
     eWayBill: { type: String },
     driverInfo: {
@@ -98,6 +105,8 @@ const userOrderSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+userOrderSchema.index({ 'user.userId': 1, checkoutKey: 1 }, { unique: true, partialFilterExpression: { checkoutKey: { $type: 'string' } } });
+userOrderSchema.index({ 'user.userId': 1, paymentProvider: 1, paymentStatus: 1, createdAt: 1 });
 userOrderSchema.pre("save", async function (next) {
   if (!this.isNew || this.orderId) {
     return next();
@@ -107,7 +116,7 @@ userOrderSchema.pre("save", async function (next) {
     const counter = await Counter.findOneAndUpdate(
       { name: "userOrder" },
       { $inc: { seq: 1 } },
-      { new: true, upsert: true }
+      { new: true, upsert: true, session: this.$session() }
     );
     this.orderId = counter.seq;
     return next();

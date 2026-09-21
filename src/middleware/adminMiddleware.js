@@ -89,6 +89,9 @@ const isAdminOrDealership = async (req, res, next) => {
         });
       }
 
+      if (!admin.adminPermissions?.some(permission => permission === '*' || permission === 'ORDERS')) {
+        return res.status(403).json({ message: 'ORDERS permission is required.' });
+      }
       req.user = {
         ...decoded,
         permissions: admin.adminPermissions || []

@@ -12,7 +12,7 @@ const aggregateProducts = (products) => {
   return [...totals.values()];
 };
 
-const consumeStock = async (dealershipId, products, orderId) => {
+const consumeStock = async (dealershipId, products, orderId, session = null) => {
   const consumed = [];
   const remaining = [];
 
@@ -20,7 +20,7 @@ const consumeStock = async (dealershipId, products, orderId) => {
     const inventory = await DealershipInventory.findOne({
       dealership: dealershipId,
       productId: product.productId,
-    });
+    }).session(session);
 
     const availableQuantity = Number(inventory?.quantity || 0);
     const orderedQuantity = Number(product.quantity || 0);
@@ -43,7 +43,7 @@ const consumeStock = async (dealershipId, products, orderId) => {
         {
           $inc: { quantity: -dealerQuantity },
         },
-        { new: true }
+        { new: true, session }
       );
 
       if (!updatedInventory) {
@@ -78,7 +78,7 @@ const consumeStock = async (dealershipId, products, orderId) => {
         balanceAfter: product.balanceAfter,
         reason: "FABRICATOR_ORDER_PLACED",
         order: orderId,
-      }))
+      })), { session }
     );
   }
 
@@ -88,21 +88,21 @@ const consumeStock = async (dealershipId, products, orderId) => {
     remainingProducts: remaining,
   };
 };
-const addStock = async (dealershipId, products, orderId) => {
+const addStock = async (dealershipId, products, orderId, session = null) => {
   for (const product of aggregateProducts(products)) {
     const inventory = await DealershipInventory.findOneAndUpdate(
       { dealership: dealershipId, productId: product.productId },
       { $inc: { quantity: product.quantity }, $set: { description: product.description || '' } },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
+      { new: true, upsert: true, setDefaultsOnInsert: true, session }
     );
-    await InventoryMovement.create({
+    await InventoryMovement.create([{
       dealership: dealershipId,
       productId: product.productId,
       quantityChange: product.quantity,
       balanceAfter: inventory.quantity,
       reason: 'DEALER_ORDER_DELIVERED',
       order: orderId,
-    });
+    }], { session });
   }
 };
 

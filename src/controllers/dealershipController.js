@@ -312,7 +312,7 @@ const decideFulfillment = async (req, res) => {
     }
     if (!mongoose.isValidObjectId(req.params.orderId)) return res.status(400).json({ message: 'Invalid order ID' });
     const order = await UserOrder.findOneAndUpdate(
-      { _id: req.params.orderId, dealership: dealership._id, 'fulfillment.status': 'AWAITING_DEALER' },
+      { _id: req.params.orderId, dealership: dealership._id, paymentProvider: { $ne: 'PAYSHARP' }, 'fulfillment.status': 'AWAITING_DEALER' },
       { $set: { 'fulfillment.status': strategy, 'fulfillment.notes': String(notes).trim(), 'fulfillment.decidedAt': new Date(), 'fulfillment.decidedBy': dealership._id } },
       { new: true }
     );
