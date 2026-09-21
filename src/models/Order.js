@@ -91,6 +91,10 @@ const userOrderSchema = new mongoose.Schema(
       default: "NONE",
     },
     inventoryProcessedAt: { type: Date, default: null },
+    fabricatorInventoryProcessedAt: {
+  type: Date,
+  default: null,
+},
     sourceOrder: { type: mongoose.Schema.Types.ObjectId, ref: "UserOrder", default: null },
     upstreamOrder: { type: mongoose.Schema.Types.ObjectId, ref: "UserOrder", default: null },
     deliveryAddress: {

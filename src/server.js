@@ -54,6 +54,7 @@ const adminRoutes = require("./routes/admin-form");
 const userRoutes = require("./routes/userRoutes");
 const profileRoutes = require("./routes/profileRoutes");
 const dealershipRoutes = require("./routes/dealershipRoutes");
+const fabricatorRoutes = require("./routes/fabricatorRoutes");
 
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
@@ -61,6 +62,7 @@ app.use("/api/user", userRoutes);
 app.use("/api/payments", require("./routes/paymentRoutes"));
 app.use("/api/profile", profileRoutes);
 app.use("/api/dealership", dealershipRoutes);
+app.use("/api/fabricator", fabricatorRoutes);
 app.use("/api/blogs", blogRoutes);
 app.get("/", (req, res) => {
   res.send("Glazia main backend is running");

@@ -88,7 +88,7 @@ exports.createOrder = wrap(async (req, res) => {
       deliveryType: 'SELF', dealership: dealership || null,
       fulfillment: { status: user.accountType !== 'DEALERSHIP' && dealership ? 'AWAITING_DEALER' : 'GLAZIA_DIRECT' },
       orderChannel: source ? 'DEALER_DIRECT_FULFILLMENT' : 'CUSTOMER', sourceOrder: source?._id,
-      inventoryDisposition: user.accountType === 'DEALERSHIP' ? 'ADD_TO_DEALER_STOCK' : 'NONE',
+      inventoryDisposition: user.accountType === 'DEALERSHIP' ? 'ADD_TO_DEALER_STOCK' : 'DIRECT_TO_FABRICATOR',
       deliveryAddress: { name: user.name, phoneNumber: user.phoneNumber, address: user.address, city: user.city, state: user.state, pincode: user.pincode },
     });
     await order.save({ session });

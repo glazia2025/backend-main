@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const { UserOrder } = require('../models/Order');
 const { DealershipInventory, InventoryMovement } = require('../models/DealershipInventory');
-const { uploadPartnerAgreement, getDynamicPricingLabels, mergePricing } = require('./userController');
+const { uploadPartnerAgreement,uploadInventoryImage, getDynamicPricingLabels, mergePricing } = require('./userController');
 const StockAdjustmentRequest = require('../models/StockAdjustmentRequest');
 
 const getDealership = async (req, res) => {
@@ -256,6 +256,36 @@ const adjustInventory = async (req, res) => {
     if (!productId) return res.status(400).json({ message: 'Product ID is required' });
     const inventory = await DealershipInventory.findOne({ dealership: dealership._id, productId });
     if (!inventory) return res.status(404).json({ message: 'Stock item not found' });
+    if (inventory.productType === 'OTHER') {
+  if (req.file) {
+    const imageUrl = await uploadInventoryImage(
+      req.file,
+      dealership._id.toString()
+    );
+
+    inventory.imageUrl = imageUrl;
+  }
+
+  const previousQuantity = inventory.quantity;
+
+  inventory.quantity = quantity;
+  await inventory.save();
+
+  await InventoryMovement.create({
+    dealership: dealership._id,
+    productId,
+    quantityChange: quantity - previousQuantity,
+    balanceAfter: quantity,
+    reason: 'ADJUSTMENT',
+    adjustedBy: dealership._id,
+    notes: 'Other product stock updated manually',
+  });
+
+  return res.json({
+    message: 'Other stock item updated successfully',
+    inventory,
+  });
+}
     await ensureNoPendingRequest(dealership._id, productId);
     const request = await StockAdjustmentRequest.create({ dealership: dealership._id, operation: 'EDIT', productId, description: inventory.description, currentQuantity: inventory.quantity, requestedQuantity: quantity, requestReason: String(req.body.notes || '').trim() });
     res.status(202).json({ message: 'Stock edit submitted for Glazia approval', request });
@@ -272,13 +302,66 @@ const createInventoryItem = async (req, res) => {
     const productId = String(req.body.productId || '').trim();
     const description = String(req.body.description || '').trim();
     const quantity = Number(req.body.quantity);
+    const productType = String(req.body.productType || 'GLAZIA').trim().toUpperCase();
+    if (!['GLAZIA', 'OTHER'].includes(productType)) {
+  return res.status(400).json({ message: 'Invalid product type' });
+}
     if (!productId || !description) return res.status(400).json({ message: 'Product code and name are required' });
     if (!Number.isInteger(quantity) || quantity < 0) return res.status(400).json({ message: 'Quantity must be a whole number of zero or more' });
     const exists = await DealershipInventory.exists({ dealership: dealership._id, productId });
     if (exists) return res.status(409).json({ message: 'This product already exists in stock; edit its quantity instead' });
-    await ensureNoPendingRequest(dealership._id, productId);
-    const request = await StockAdjustmentRequest.create({ dealership: dealership._id, operation: 'ADD', productId, description, currentQuantity: 0, requestedQuantity: quantity, requestReason: String(req.body.notes || '').trim() });
-    res.status(202).json({ message: 'New stock item submitted for Glazia approval', request });
+    
+    if (productType === 'OTHER') {
+  if (!req.file) {
+    return res.status(400).json({ message: 'Item image is required' });
+  }
+
+  const imageUrl = await uploadInventoryImage(
+    req.file,
+    dealership._id.toString()
+  );
+
+  const inventory = await DealershipInventory.create({
+    dealership: dealership._id,
+    productId,
+    description,
+    productType: 'OTHER',
+    imageUrl,
+    quantity,
+  });
+
+  await InventoryMovement.create({
+    dealership: dealership._id,
+    productId,
+    quantityChange: quantity,
+    balanceAfter: quantity,
+    reason: 'ADJUSTMENT',
+    adjustedBy: dealership._id,
+    notes: 'Other product added manually',
+  });
+
+  return res.status(201).json({
+    message: 'Other stock item added successfully',
+    inventory,
+  });
+}
+
+await ensureNoPendingRequest(dealership._id, productId);
+
+const request = await StockAdjustmentRequest.create({
+  dealership: dealership._id,
+  operation: 'ADD',
+  productId,
+  description,
+  currentQuantity: 0,
+  requestedQuantity: quantity,
+  requestReason: String(req.body.notes || '').trim()
+});
+
+res.status(202).json({
+  message: 'New stock item submitted for Glazia approval',
+  request
+});
   } catch (error) {
     console.error('Error creating dealership inventory:', error);
     if (error?.code === 11000) return res.status(409).json({ message: 'This product already exists in stock' });
@@ -293,6 +376,15 @@ const deleteInventoryItem = async (req, res) => {
     const productId = String(req.params.productId || '').trim();
     const inventory = await DealershipInventory.findOne({ dealership: dealership._id, productId });
     if (!inventory) return res.status(404).json({ message: 'Stock item not found' });
+    if (inventory.productType === 'OTHER') {
+  await DealershipInventory.deleteOne({
+    _id: inventory._id,
+  });
+
+  return res.json({
+    message: 'Other stock item deleted successfully',
+  });
+}
     await ensureNoPendingRequest(dealership._id, productId);
     const request = await StockAdjustmentRequest.create({ dealership: dealership._id, operation: 'DELETE', productId, description: inventory.description, currentQuantity: inventory.quantity, requestedQuantity: 0, requestReason: String(req.body?.notes || '').trim() });
     res.status(202).json({ message: 'Stock deletion submitted for Glazia approval', request });

@@ -4,6 +4,16 @@ const dealershipInventorySchema = new mongoose.Schema({
   dealership: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   productId: { type: String, required: true },
   description: { type: String, default: '' },
+  productType: {
+  type: String,
+  enum: ['GLAZIA', 'OTHER'],
+  default: 'GLAZIA',
+},
+
+imageUrl: {
+  type: String,
+  default: '',
+},
   quantity: { type: Number, required: true, default: 0, min: 0 },
 }, { timestamps: true });
 

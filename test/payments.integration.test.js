@@ -306,3 +306,17 @@ test('rollout changes mid-checkout require a refreshed quote and do not create a
   assert.equal((await api('/api/user/pi-generate', { ...body, paymentProvider: 'LEGACY', payment: { proof: 'data:image/png;base64,aGVsbG8=' } })).status, 409);
   assert.equal(await UserOrder.countDocuments(), 0); assert.equal(calls.length, 0);
 });
+test('merged fabricator delivery updates inventory once when a Paysharp order completes', async () => {
+  const order = await checkout();
+  const FabricatorInventory = require('../src/models/FabricatorInventory');
+  assert.equal(await FabricatorInventory.countDocuments(), 0);
+  await service.recordReceipt(bank(1180), 'BANK_TRANSFER');
+  assert.equal(await FabricatorInventory.countDocuments(), 0);
+  const documents = { biltyDoc: 'doc', eWayBill: 'doc', taxInvoice: 'doc', driverInfo: { name: 'Driver', phone: '9999999999' } };
+  await completePaidOrder(order._id, documents);
+  const item = await FabricatorInventory.findOne({ fabricator: customer._id, productId: 'HW1' });
+  assert.equal(item.quantity, 1);
+  assert.ok((await UserOrder.findById(order._id)).fabricatorInventoryProcessedAt);
+  await assert.rejects(completePaidOrder(order._id, documents), /already complete/);
+  assert.equal((await FabricatorInventory.findById(item._id)).quantity, 1);
+});

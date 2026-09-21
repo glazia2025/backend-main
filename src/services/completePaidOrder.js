@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const User = require('../models/User');
+const { addDeliveredProductsToFabricatorInventory } = require('./fabricatorInventoryService');
 const { UserOrder } = require('../models/Order');
 const { consumeStock, addStock } = require('./dealershipInventoryService');
 const { fail } = require('../utils/paymentRules');
@@ -21,6 +23,11 @@ async function completePaidOrder(id, documents) {
     if (order.inventoryDisposition === 'ADD_TO_DEALER_STOCK' && !order.inventoryProcessedAt) {
       await addStock(order.dealership || order.user.userId, order.products, order._id, session);
       order.inventoryProcessedAt = new Date();
+    }
+    const fabricator = await User.findOne({ _id: order.user.userId, accountType: 'FABRICATOR' }).session(session);
+    if (fabricator && !order.fabricatorInventoryProcessedAt) {
+      await addDeliveredProductsToFabricatorInventory(fabricator._id, order.products, order._id, session);
+      order.fabricatorInventoryProcessedAt = new Date();
     }
     for (const key of ['biltyDoc', 'eWayBill', 'taxInvoice', 'driverInfo']) order[key] = documents[key];
     order.isComplete = true; order.completedAt = new Date();
