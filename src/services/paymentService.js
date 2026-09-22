@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { PaymentAccount, PaymentReceipt, PaymentAttempt } = require('../models/Payment');
+const { PaymentAccount, PaymentReceipt, PaymentAttempt, PaymentCheckout } = require('../models/Payment');
 const { UserOrder } = require('../models/Order');
 const User = require('../models/User');
 const provider = require('./paysharpClient');
@@ -99,6 +99,26 @@ async function recordReceipt(data, method, attempt) {
       if (String(existing.user) !== String(account.user) || existing.amountPaise !== amount || existing.method !== method) throw fail('Conflicting payment reference', 409);
       return;
     }
+    if (attempt?.checkout) {
+      const checkout = await PaymentCheckout.findById(attempt.checkout).session(session);
+      if (!checkout || String(checkout.user) !== String(account.user)) throw fail('Payment checkout not found', 409);
+      if (checkout.orderSnapshot.totalPaise !== amount) throw fail('Payment does not match checkout total', 409);
+      if (checkout.status === 'PENDING') {
+        // Serialize against concurrent new checkout/legacy order creation for this user.
+        await User.updateOne({ _id: checkout.user }, { $inc: { paymentRevision: 1 } }, { session });
+        const order = new UserOrder(checkout.orderSnapshot);
+        if (checkout.sourceOrder) {
+          const source = await UserOrder.findOne({ _id: checkout.sourceOrder, dealership: checkout.user,
+            upstreamOrder: null, 'fulfillment.status': 'GLAZIA_VIA_DEALER', isComplete: false }).session(session);
+          if (!source) throw fail('The shortage order has changed. Contact Glazia to reconcile this payment.', 409);
+          source.upstreamOrder = order._id;
+          await source.save({ session });
+        }
+        await order.save({ session });
+        checkout.status = 'COMPLETED'; checkout.completedAt = new Date();
+        await checkout.save({ session });
+      }
+    }
     await PaymentReceipt.create([{
       reference: data.paysharpReferenceNo, user: account.user, method, amountPaise: amount,
       feePaise: paise(data.totalFee || 0), netPaise: paise(data.netAmount ?? data.amount),
@@ -140,7 +160,7 @@ async function createUpi(order, user, kind = 'qr') {
   }
   if (!attempt) {
     try {
-      attempt = await PaymentAttempt.create({ order: order._id, user: user._id, amountPaise: order.totalPaise - order.paidPaise, kind });
+      attempt = await PaymentAttempt.create({ order: order._id, user: user._id, amountPaise: order.totalPaise - order.paidPaise, kind, ...(order.isCheckout ? { checkout: order._id } : {}) });
     } catch (error) {
       if (error.code !== 11000) throw error;
       attempt = await PaymentAttempt.findOne({ order: order._id, active: true });
@@ -161,7 +181,7 @@ async function createUpi(order, user, kind = 'qr') {
   const data = await provider.request('upi', 'POST', attempt.kind === 'intent' ? '/order/intent' : '/order/qrcode', {
     orderId: String(attempt._id), amount: rupees(attempt.amountPaise), customerId: String(user._id),
     customerName: user.name, customerMobileNo: String(user.phoneNumber).replace(/\D/g, '').slice(-10),
-    customerEmail: user.email || '', remarks: `Glazia order ${order.orderId}`.slice(0, 35),
+    customerEmail: user.email || '', remarks: (order.isCheckout ? `Glazia checkout ${String(order._id).slice(-12)}` : `Glazia order ${order.orderId}`).slice(0, 35),
   });
   if (data.orderId !== String(attempt._id) || data.customerId !== String(user._id) || paise(data.amount) !== attempt.amountPaise || (attempt.kind === 'qr' ? !/^data:image\/(png|jpeg);base64,[a-zA-Z0-9+/=]+$/.test(data.qrCode || '') : !/^upi:\/\/pay\?/.test(data.intentUrl || ''))) throw fail('Invalid UPI QR response', 502);
   attempt.qrCode = data.qrCode; attempt.intentUrl = data.intentUrl; attempt.reference = data.paysharpReferenceNo;

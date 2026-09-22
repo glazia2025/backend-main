@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
 const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const express = require('express');
-const { PaymentAccount, PaymentReceipt, PaymentAttempt } = require('../src/models/Payment');
+const { PaymentAccount, PaymentReceipt, PaymentAttempt, PaymentCheckout } = require('../src/models/Payment');
 const { UserOrder } = require('../src/models/Order');
 const User = require('../src/models/User');
 const Hardware = require('../src/models/Hardware');
@@ -58,13 +58,37 @@ async function api(path, body, auth = token) {
   const response = await fetch(`${base}${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   return { status: response.status, data: await response.json() };
 }
-async function checkout(quantity = 1, key = 'checkout_test_00001') {
+async function pendingCheckout(quantity = 1, key = 'checkout_test_00001') {
   const body = { products: [{ productId: 'HW1', quantity }] };
   const quote = await api('/api/payments/quote', body);
   assert.equal(quote.status, 200);
   const result = await api('/api/user/pi-generate', { ...body, checkoutKey: key, expectedTotalPaise: quote.data.totalPaise });
   assert.equal(result.status, 201, JSON.stringify(result));
-  return result.data.order;
+  assert.equal(result.data.order, null);
+  return result.data.checkout;
+}
+// Explicit fixtures for orders created before pay-first checkout was introduced.
+async function historicalOrder(quantity = 1, key = 'checkout_test_00001') {
+  const pending = await pendingCheckout(quantity, key);
+  const draft = await PaymentCheckout.findById(pending._id);
+  await UserOrder.create(draft.orderSnapshot);
+  await PaymentCheckout.deleteOne({ _id: draft._id });
+  await mongoose.connection.transaction(async session => {
+    const account = await PaymentAccount.findOne({ user: customer._id }).session(session);
+    await service.allocateCredit(account, session);
+  });
+  const order = await UserOrder.findById(pending._id);
+  return { ...pending, paidPaise: order.paidPaise, paymentStatus: order.paymentStatus };
+}
+async function payCheckout(id, auth = token) {
+  const response = await api(`/api/payments/orders/${id}/upi`, { kind: 'qr' }, auth);
+  assert.equal(response.status, 200, JSON.stringify(response));
+  const attempt = await PaymentAttempt.findOne({ order: id, active: true });
+  const path = `/order/${attempt._id}`;
+  remote.set(path, { ...remote.get(path), status: 'SUCCESS', utrNumber: `UTR_${attempt._id}`, transactionDate: new Date().toISOString() });
+  const paid = await api('/api/payments/webhooks/upi', { orderId: String(attempt._id) }, null);
+  assert.equal(paid.status, 200, JSON.stringify(paid));
+  return attempt;
 }
 async function bank(amount, reference = 'BANK001', user = customer) {
   // Historical VA fixture: only bank-payment tests provision an account.
@@ -72,20 +96,22 @@ async function bank(amount, reference = 'BANK001', user = customer) {
   const data = { externalCustomerId: String(user._id), virtualAccountNo: `VA${user._id}`, amount, totalFee: 5, netAmount: amount - 5, paysharpReferenceNo: reference, utrNumber: `UTR_${reference}`, transactionDate: new Date().toISOString() };
   remote.set(`/transactions/${reference}`, data); return data;
 }
-test('server prices ignore browser amounts, and checkout retries create one order', async () => {
+test('server prices ignore browser amounts; concurrent checkout retries create one pending checkout and no order', async () => {
   const body = { products: [{ productId: 'HW1', quantity: 1, amount: 0.01 }], totalAmount: 0.01, checkoutKey: 'idempotent_checkout_01', expectedTotalPaise: 118000 };
   const [first, second] = await Promise.all([api('/api/user/pi-generate', body), api('/api/user/pi-generate', body)]);
   assert.ok([200, 201].includes(first.status), JSON.stringify(first)); assert.ok([200, 201].includes(second.status), JSON.stringify(second));
-  assert.equal(first.data.order._id, second.data.order._id);
-  assert.equal(await UserOrder.countDocuments(), 1);
-  assert.equal(first.data.order.totalPaise, 118000);
+  assert.equal(first.data.checkout._id, second.data.checkout._id);
+  assert.equal(await UserOrder.countDocuments(), 0);
+  assert.equal(await PaymentCheckout.countDocuments(), 1);
+  assert.equal((await mongoose.models.Counter.findOne()).seq, 0);
+  assert.equal(first.data.checkout.totalPaise, 118000);
   const tampered = await api('/api/user/pi-generate', { ...body, checkoutKey: 'idempotent_checkout_02', expectedTotalPaise: 1 });
   assert.equal(tampered.status, 409);
 });
 test('₹1,00,000 boundary is based on full order total, even after partial payment', async () => {
   assert.equal(upiAllowed(9999999), true); assert.equal(upiAllowed(10000000), false); assert.equal(upiAllowed(10000001), false);
   // Existing high-value Paysharp orders keep their original payment rules.
-  const order = await checkout();
+  const order = await historicalOrder();
   await UserOrder.updateOne({ _id: order._id }, { totalPaise: 11800000, totalAmount: 118000 });
   const response = await api(`/api/payments/orders/${order._id}/upi`, {});
   assert.equal(response.status, 400);
@@ -93,12 +119,12 @@ test('₹1,00,000 boundary is based on full order total, even after partial paym
   assert.equal((await api(`/api/payments/orders/${order._id}/upi`, {})).status, 400);
 });
 test('orders between ₹50,000 and ₹1,00,000 now allow UPI', async () => {
-  const order = await checkout(50);
+  const order = await historicalOrder(50);
   assert.equal(order.totalPaise, 5900000);
   assert.equal((await api(`/api/payments/orders/${order._id}/upi`, {})).status, 200);
 });
 test('bank webhook uses provider data, deduplicates concurrent delivery and keeps fees separate', async () => {
-  const order = await checkout(); await bank(1180);
+  const order = await historicalOrder(); await bank(1180);
   const responses = await Promise.all([1, 2, 3].map(() => api('/api/payments/webhooks/virtual-account', { paysharpReferenceNo: 'BANK001', amount: 99999999, externalCustomerId: 'forged' }, null)));
   responses.forEach(response => assert.equal(response.status, 200, JSON.stringify(response)));
   const saved = await UserOrder.findById(order._id);
@@ -107,18 +133,18 @@ test('bank webhook uses provider data, deduplicates concurrent delivery and keep
   const receipt = await PaymentReceipt.findOne(); assert.equal(receipt.feePaise, 500); assert.equal(receipt.netPaise, 117500);
 });
 test('partial receipts allocate FIFO and excess credits a future order', async () => {
-  const first = await checkout(1, 'checkout_first_0001'); const second = await checkout(1, 'checkout_second_0001');
+  const first = await historicalOrder(1, 'checkout_first_0001'); const second = await historicalOrder(1, 'checkout_second_0001');
   await service.recordReceipt(await bank(500), 'BANK_TRANSFER');
   assert.equal((await UserOrder.findById(first._id)).paymentStatus, 'PARTIALLY_PAID');
   assert.equal((await UserOrder.findById(second._id)).paidPaise, 0);
   await service.recordReceipt(await bank(3000, 'BANK002'), 'BANK_TRANSFER');
   assert.equal((await PaymentAccount.findOne()).creditPaise, 114000);
-  const third = await checkout(1, 'checkout_third_0001');
+  const third = await historicalOrder(1, 'checkout_third_0001');
   assert.equal(third.paidPaise, 114000); assert.equal(third.paymentStatus, 'PARTIALLY_PAID');
   assert.equal((await PaymentAccount.findOne()).creditPaise, 0);
 });
 test('UPI is tied to its intended order, verifies success and never regresses to pending', async () => {
-  const first = await checkout(1, 'checkout_first_0001'); const second = await checkout(1, 'checkout_second_0001');
+  const first = await historicalOrder(1, 'checkout_first_0001'); const second = await historicalOrder(1, 'checkout_second_0001');
   assert.equal((await api(`/api/payments/orders/${second._id}/upi`, { kind: 'intent' })).status, 200);
   const attempt = await PaymentAttempt.findOne();
   const path = `/order/${attempt._id}`;
@@ -132,7 +158,7 @@ test('UPI is tied to its intended order, verifies success and never regresses to
   assert.equal((await PaymentAttempt.findById(attempt._id)).status, 'SUCCESS');
 });
 test('wrong customer / amount / account confirmations cannot credit an order', async () => {
-  const order = await checkout(); await api(`/api/payments/orders/${order._id}/upi`, {});
+  const order = await historicalOrder(); await api(`/api/payments/orders/${order._id}/upi`, {});
   const attempt = await PaymentAttempt.findOne(); const path = `/order/${attempt._id}`;
   remote.set(path, { ...remote.get(path), status: 'SUCCESS', amount: 1, utrNumber: 'WRONG', transactionDate: new Date().toISOString() });
   assert.equal((await api('/api/payments/webhooks/upi', { orderId: String(attempt._id) }, null)).status, 409);
@@ -141,7 +167,7 @@ test('wrong customer / amount / account confirmations cannot credit an order', a
   assert.equal(await PaymentReceipt.countDocuments(), 0);
 });
 test('account and order payment APIs require the owner', async () => {
-  const order = await checkout();
+  const order = await historicalOrder();
   assert.equal((await api(`/api/payments/orders/${order._id}`, undefined, null)).status, 403);
   const other = await User.create({ name: 'Other', email: 'other@test.invalid', phoneNumber: '8888888888', phoneNumbers: ['8888888888'], city: 'Pune', paUrl: 'other' });
   const otherToken = signJwt({ role: 'user', userId: String(other._id) });
@@ -152,7 +178,7 @@ test('dealer stock is consumed only when fully paid; duplicate notifications can
   const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
   await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 10 });
-  const order = await checkout(2);
+  const order = await historicalOrder(2);
   assert.equal((await DealershipInventory.findOne()).quantity, 10);
   await service.recordReceipt(await bank(2360), 'BANK_TRANSFER');
   await service.recordReceipt(await bank(2360), 'BANK_TRANSFER');
@@ -162,7 +188,7 @@ test('dealer stock is consumed only when fully paid; duplicate notifications can
 });
 test('completion requires paid status and stock additions happen once', async () => {
   await User.updateOne({ _id: customer._id }, { accountType: 'DEALERSHIP' });
-  const order = await checkout();
+  const order = await historicalOrder();
   const documents = { biltyDoc: 'doc', eWayBill: 'doc', taxInvoice: 'doc', driverInfo: { name: 'Driver', phone: '9999999999' } };
   await assert.rejects(completePaidOrder(order._id, documents), /Full payment/);
   await service.recordReceipt(await bank(1180), 'BANK_TRANSFER');
@@ -178,7 +204,7 @@ test('inventory-write failure rolls back receipt, payment balance, and stock bef
   const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
   await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 3 });
-  const order = await checkout(); const data = await bank(1180);
+  const order = await historicalOrder(); const data = await bank(1180);
   const originalInsert = InventoryMovement.insertMany;
   InventoryMovement.insertMany = async () => { throw new Error('simulated ledger-write failure'); };
   try { await assert.rejects(service.recordReceipt(data, 'BANK_TRANSFER'), /simulated/); }
@@ -194,27 +220,29 @@ test('shortage purchase links once, replenishes dealer inventory and releases or
   const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
   await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 1 });
-  const original = await checkout(3);
+  const original = await historicalOrder(3);
   await service.recordReceipt(await bank(3540), 'BANK_TRANSFER');
   assert.equal((await UserOrder.findById(original._id)).fulfillment.remainingProducts[0].quantity, 2);
   const dealerToken = signJwt({ role: 'user', userId: String(dealer._id) });
   const body = { sourceOrderId: original._id, checkoutKey: 'dealer_shortage_0001', expectedTotalPaise: 236000 };
   const first = await api('/api/user/pi-generate', body, dealerToken);
   assert.equal(first.status, 201, JSON.stringify(first));
-  assert.equal((await api('/api/user/pi-generate', body, dealerToken)).data.order._id, first.data.order._id);
+  assert.equal((await api('/api/user/pi-generate', body, dealerToken)).data.checkout._id, first.data.checkout._id);
+  assert.equal((await UserOrder.findById(original._id)).upstreamOrder, null);
   const duplicate = await api('/api/user/pi-generate', { ...body, checkoutKey: 'dealer_shortage_0002' }, dealerToken);
-  assert.equal(duplicate.status, 409); assert.equal(await UserOrder.countDocuments(), 2);
+  assert.equal(duplicate.status, 409); assert.equal(await UserOrder.countDocuments(), 1);
   const documents = { biltyDoc: 'doc', eWayBill: 'doc', taxInvoice: 'doc', driverInfo: { name: 'Driver', phone: '9999999999' } };
   await assert.rejects(completePaidOrder(original._id, documents), /shortage order/);
-  await service.recordReceipt(await bank(2360, 'DEALER_BANK', dealer), 'BANK_TRANSFER');
-  await completePaidOrder(first.data.order._id, documents);
+  await payCheckout(first.data.checkout._id, dealerToken);
+  assert.equal(await UserOrder.countDocuments(), 2);
+  await completePaidOrder(first.data.checkout._id, documents);
   assert.equal((await DealershipInventory.findOne()).quantity, 2);
   await completePaidOrder(original._id, documents);
   assert.equal((await DealershipInventory.findOne()).quantity, 0);
   assert.equal((await UserOrder.findById(original._id)).isComplete, true);
 });
 test('expired UPI attempts can be retried without reusing the provider order ID', async () => {
-  const order = await checkout();
+  const order = await historicalOrder();
   assert.equal((await api(`/api/payments/orders/${order._id}/upi`, {})).status, 200);
   const first = await PaymentAttempt.findOne();
   remote.set(`/order/${first._id}`, { ...remote.get(`/order/${first._id}`), status: 'EXPIRED' });
@@ -226,7 +254,7 @@ test('expired UPI attempts can be retried without reusing the provider order ID'
   assert.equal(await PaymentAttempt.countDocuments(), 2);
 });
 test('pending or unverifiable notifications do not approve payment', async () => {
-  const order = await checkout(); await api(`/api/payments/orders/${order._id}/upi`, {});
+  const order = await historicalOrder(); await api(`/api/payments/orders/${order._id}/upi`, {});
   const attempt = await PaymentAttempt.findOne();
   assert.equal((await api('/api/payments/webhooks/upi', { orderId: String(attempt._id), status: 'SUCCESS', amount: 1180 }, null)).status, 200);
   assert.equal((await UserOrder.findById(order._id)).paidPaise, 0);
@@ -244,13 +272,15 @@ test('quotation checkout fetches authoritative BOM and stores quotation linkage'
   try {
     const result = await api('/api/user/pi-generate', { quotationId, products: [{ productId: 'fake', quantity: 100, amount: 0.01 }], checkoutKey: 'quotation_checkout01', expectedTotalPaise: 236000 });
     assert.equal(result.status, 201, JSON.stringify(result));
-    const saved = await UserOrder.findById(result.data.order._id);
+    assert.equal(await UserOrder.countDocuments(), 0);
+    await payCheckout(result.data.checkout._id);
+    const saved = await UserOrder.findById(result.data.checkout._id);
     assert.equal(String(saved.quotationId), quotationId); assert.equal(saved.quotationCode, 'QT-TEST');
     assert.equal(saved.products[0].productId, 'HW1'); assert.equal(saved.products[0].quantity, 2);
   } finally { axios.get = originalGet; }
 });
 test('manual payment endpoints cannot edit a Paysharp receipt', async () => {
-  const order = await checkout(); await service.recordReceipt(await bank(1180), 'BANK_TRANSFER');
+  const order = await historicalOrder(); await service.recordReceipt(await bank(1180), 'BANK_TRANSFER');
   const saved = await UserOrder.findById(order._id);
   const legacy = require('../src/controllers/orderController');
   for (const fn of [legacy.approvePayment, legacy.updatePaymentDueDate, legacy.uploadPaymentProof, legacy.createPayment]) {
@@ -262,7 +292,7 @@ test('manual payment endpoints cannot edit a Paysharp receipt', async () => {
   assert.equal((await UserOrder.findById(order._id)).paidPaise, 118000);
 });
 test('UPI amounts below provider minimum are rejected after a partial bank receipt', async () => {
-  const order = await checkout(); await service.recordReceipt(await bank(1179.99), 'BANK_TRANSFER');
+  const order = await historicalOrder(); await service.recordReceipt(await bank(1179.99), 'BANK_TRANSFER');
   const result = await api(`/api/payments/orders/${order._id}/upi`, {});
   assert.equal(result.status, 400);
   assert.match(result.data.message, /at least ₹1/);
@@ -294,7 +324,7 @@ test('test mode excludes unlisted users from Paysharp and creates proof-based or
 test('test mode allows listed registered users and global rollout ignores the list', async () => {
   process.env.Paysharp_test_active = 'true'; process.env.Paysharp_Test_users = '+91 99999 99999,8888888888';
   assert.equal((await api('/api/payments/config')).data.paymentProvider, 'PAYSHARP');
-  const order = await checkout(); assert.equal(order.paymentProvider, 'PAYSHARP');
+  const order = await historicalOrder(); assert.equal(order.paymentProvider, 'PAYSHARP');
   process.env.Paysharp_Test_users = '7777777777';
   assert.equal((await api('/api/payments/config')).data.paymentProvider, 'LEGACY');
   // Already-created Paysharp orders remain payable after removing a user from the list.
@@ -311,7 +341,7 @@ test('rollout changes mid-checkout require a refreshed quote and do not create a
   assert.equal(await UserOrder.countDocuments(), 0); assert.equal(calls.length, 0);
 });
 test('merged fabricator delivery updates inventory once when a Paysharp order completes', async () => {
-  const order = await checkout();
+  const order = await historicalOrder();
   const FabricatorInventory = require('../src/models/FabricatorInventory');
   assert.equal(await FabricatorInventory.countDocuments(), 0);
   await service.recordReceipt(await bank(1180), 'BANK_TRANSFER');
@@ -327,7 +357,8 @@ test('merged fabricator delivery updates inventory once when a Paysharp order co
 
 test('UPI-only checkout creates a local ledger and QR/intent without any VA calls', async () => {
   for (const kind of ['qr', 'intent']) {
-    const order = await checkout(1, `upi_only_checkout_${kind}`);
+    const order = await pendingCheckout(1, `upi_only_checkout_${kind}`);
+    assert.equal(await UserOrder.findById(order._id), null);
     assert.equal(calls.filter(call => call.kind === 'va').length, 0);
     const account = await PaymentAccount.findOne({ user: customer._id });
     assert.ok(account); assert.equal(account.virtualAccountNo, undefined);
@@ -357,4 +388,108 @@ test('high-value checkout uses proof upload and rejects forcing Paysharp', async
   assert.equal(response.status, 201, JSON.stringify(response));
   assert.equal(response.data.order.paymentProvider, 'LEGACY');
   assert.equal(calls.length, 0); assert.equal(await PaymentAccount.countDocuments(), 0);
+});
+
+test('pending, failed, expired and forged success notifications never create an order', async () => {
+  const checkout = await pendingCheckout();
+  assert.equal(checkout.orderId, undefined);
+  assert.equal((await api(`/api/payments/orders/${checkout._id}/upi`, {})).status, 200);
+  const attempt = await PaymentAttempt.findOne({ checkout: checkout._id });
+  assert.ok(attempt);
+  const path = `/order/${attempt._id}`;
+  for (const status of ['PENDING', 'ON PROGRESS', 'FAILED', 'EXPIRED']) {
+    remote.set(path, { ...remote.get(path), status });
+    assert.equal((await api('/api/payments/webhooks/upi', { orderId: String(attempt._id), status: 'SUCCESS' }, null)).status, 200);
+    assert.equal(await UserOrder.countDocuments(), 0);
+    assert.equal(await PaymentReceipt.countDocuments(), 0);
+    assert.equal(await InventoryMovement.countDocuments(), 0);
+    assert.equal((await mongoose.models.Counter.findOne()).seq, 0);
+    const statusResponse = await api(`/api/payments/orders/${checkout._id}`);
+    assert.equal(statusResponse.data.order, null);
+    assert.equal(statusResponse.data.checkout._id, checkout._id);
+  }
+  // Reopening starts another payment attempt against the same pending checkout.
+  assert.equal((await api(`/api/payments/orders/${checkout._id}/upi`, {})).status, 200);
+  const retry = await PaymentAttempt.findOne({ checkout: checkout._id, active: true });
+  assert.notEqual(String(attempt._id), String(retry._id));
+  assert.equal(await UserOrder.countDocuments(), 0);
+});
+
+test('verified payment creates exactly one paid order under concurrent webhook and refresh retries', async () => {
+  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
+  await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
+  await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 10 });
+  const checkout = await pendingCheckout(2);
+  assert.equal((await DealershipInventory.findOne()).quantity, 10);
+  await api(`/api/payments/orders/${checkout._id}/upi`, {});
+  const attempt = await PaymentAttempt.findOne();
+  const path = `/order/${attempt._id}`;
+  remote.set(path, { ...remote.get(path), status: 'SUCCESS', utrNumber: 'VERIFIED', transactionDate: new Date().toISOString() });
+  const responses = await Promise.all([
+    api('/api/payments/webhooks/upi', { orderId: String(attempt._id) }, null),
+    api('/api/payments/webhooks/upi', { orderId: String(attempt._id) }, null),
+    api(`/api/payments/orders/${checkout._id}/refresh`, {}),
+  ]);
+  responses.forEach(result => assert.equal(result.status, 200, JSON.stringify(result)));
+  assert.equal(await UserOrder.countDocuments(), 1);
+  assert.equal(await PaymentReceipt.countDocuments(), 1);
+  assert.equal(await InventoryMovement.countDocuments(), 1);
+  assert.equal((await DealershipInventory.findOne()).quantity, 8);
+  const order = await UserOrder.findById(checkout._id);
+  assert.equal(order.paymentStatus, 'PAID'); assert.equal(order.paidPaise, 236000);
+  assert.equal(order.orderId, 1);
+  assert.equal((await PaymentCheckout.findById(checkout._id)).status, 'COMPLETED');
+  const retry = await api('/api/user/pi-generate', { products: [{ productId: 'HW1', quantity: 2 }], checkoutKey: 'checkout_test_00001', expectedTotalPaise: 236000 });
+  assert.equal(retry.status, 200); assert.equal(retry.data.order._id, checkout._id);
+});
+
+test('order creation and counter roll back with inventory failure, then verified retry creates the order', async () => {
+  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
+  await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
+  await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 10 });
+  const checkout = await pendingCheckout();
+  await api(`/api/payments/orders/${checkout._id}/upi`, {});
+  const attempt = await PaymentAttempt.findOne(); const path = `/order/${attempt._id}`;
+  remote.set(path, { ...remote.get(path), status: 'SUCCESS', utrNumber: 'VERIFIED', transactionDate: new Date().toISOString() });
+  const originalInsert = InventoryMovement.insertMany;
+  InventoryMovement.insertMany = async () => { throw new Error('simulated inventory failure'); };
+  try { assert.equal((await api('/api/payments/webhooks/upi', { orderId: String(attempt._id) }, null)).status, 500); }
+  finally { InventoryMovement.insertMany = originalInsert; }
+  assert.equal(await UserOrder.countDocuments(), 0); assert.equal(await PaymentReceipt.countDocuments(), 0);
+  assert.equal((await mongoose.models.Counter.findOne()).seq, 0);
+  assert.equal((await PaymentCheckout.findById(checkout._id)).status, 'PENDING');
+  assert.equal((await DealershipInventory.findOne()).quantity, 10);
+  const refreshed = await api(`/api/payments/orders/${checkout._id}/refresh`, {});
+  assert.equal(refreshed.status, 200, JSON.stringify(refreshed));
+  assert.equal(refreshed.data.order.paymentStatus, 'PAID');
+  assert.equal(await UserOrder.countDocuments(), 1);
+});
+
+test('wrong amount/customer or unavailable provider cannot finalize a checkout', async () => {
+  const checkout = await pendingCheckout(); await api(`/api/payments/orders/${checkout._id}/upi`, {});
+  const attempt = await PaymentAttempt.findOne(); const path = `/order/${attempt._id}`;
+  const valid = { ...remote.get(path), status: 'SUCCESS', utrNumber: 'VERIFIED', transactionDate: new Date().toISOString() };
+  for (const change of [{ amount: 1 }, { customerId: String(new mongoose.Types.ObjectId()) }, { orderId: String(new mongoose.Types.ObjectId()) }]) {
+    remote.set(path, { ...valid, ...change });
+    assert.equal((await api('/api/payments/webhooks/upi', { orderId: String(attempt._id) }, null)).status, 409);
+    assert.equal(await UserOrder.countDocuments(), 0);
+  }
+  remote.delete(path);
+  assert.equal((await api('/api/payments/webhooks/upi', { orderId: String(attempt._id) }, null)).status, 502);
+  assert.equal(await UserOrder.countDocuments(), 0); assert.equal(await PaymentReceipt.countDocuments(), 0);
+});
+
+test('pending checkout cannot be accessed by another user and survives rollout changes without becoming a legacy order', async () => {
+  const checkout = await pendingCheckout();
+  const other = await User.create({ name: 'Other', email: 'other@test.invalid', phoneNumber: '8888888888', phoneNumbers: ['8888888888'], city: 'Pune', paUrl: 'other' });
+  const otherToken = signJwt({ role: 'user', userId: String(other._id) });
+  for (const suffix of ['', '/refresh', '/upi']) {
+    assert.equal((await api(`/api/payments/orders/${checkout._id}${suffix}`, suffix ? {} : undefined, otherToken)).status, 404);
+  }
+  process.env.Paysharp_test_active = 'True'; process.env.Paysharp_Test_users = '';
+  const retry = await api('/api/user/pi-generate', { products: [{ productId: 'HW1', quantity: 1 }], checkoutKey: 'checkout_test_00001', expectedTotalPaise: 118000, paymentProvider: 'LEGACY', payment: { proof: 'data:image/png;base64,aGVsbG8=' } });
+  assert.equal(retry.status, 200); assert.equal(retry.data.order, null); assert.equal(retry.data.checkout._id, checkout._id);
+  assert.equal(await UserOrder.countDocuments(), 0);
+  await payCheckout(checkout._id);
+  assert.equal((await UserOrder.findById(checkout._id)).paymentStatus, 'PAID');
 });

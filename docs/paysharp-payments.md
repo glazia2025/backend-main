@@ -2,7 +2,7 @@
 
 ## Deployment configuration
 
-Changes for this phase are on `feat/paysharp-upi-only` in backend-main, glazia-frontend and glazia-quotation. Deploy all three together. Tests do not make real payments.
+Pay-first changes are on `fix/paysharp-order-after-payment` in backend-main, glazia-frontend and glazia-quotation. Deploy all three together: Paysharp creation now returns `{order: null, checkout: ...}` until payment succeeds. Legacy order responses remain unchanged. Tests do not make real payments.
 
 Set server-only variables in backend-main's hosting environment or ignored `prod.env`:
 
@@ -38,16 +38,21 @@ MongoDB must support transactions (replica set or Atlas). Payment indexes initia
 - Rollout-excluded users retain their original QR/bank details and proof upload.
 - Both quote and order creation enforce the selected provider server-side; stale or tampered selections return a conflict.
 - Full payment is required before fulfillment and dealer-stock consumption for Paysharp orders. Legacy orders retain their existing manual review and stock behavior.
-- UPI receipts prioritize the originating order. Existing unapplied credits remain usable. Gross amounts, fees and net amounts are recorded separately.
-- Payment status is independent of shipping/completion. Closing checkout leaves the saved order available in order history.
+- UPI receipts prioritize the originating order. New checkouts request the full UPI amount; historical unapplied credit is retained and allocated when verified payment is processed. Gross amounts, fees and net amounts are recorded separately.
+- Paysharp checkout is stored separately in `paymentcheckouts`. No order, order number, shortage-order link, or stock movement exists until a successful UPI payment is independently verified. Failed, pending and abandoned checkouts stay out of customer/admin order lists.
+- Verified payment creates the order, records the receipt, links any shortage purchase and applies inventory effects in one transaction. Duplicate webhook/refresh requests cannot create another order.
+- Closing an unpaid checkout preserves the cart and retry key. The Done action and order-history link become available after payment confirmation. Legacy proof-upload steps and screens are unchanged.
+- Existing unpaid Paysharp orders from earlier releases are preserved and remain payable; this change does not delete or migrate historical orders.
 
 ## Implementation
 
 The storefront sends product identifiers and quantities; main backend loads current catalog pricing and user adjustments. The quotation checkout sends `quotationId`; main backend fetches authenticated BOM data directly from the quotation service and saves the quotation reference. Dealer shortage purchases are priced from server-stored shortage quantities using the dealer's catalog rates. Submitted browser prices/proofs are not trusted. Whole-rupee GST rounding is preserved from the prior checkout. Checkout displays the server quote and confirms its total again before saving.
 
-`checkoutKey` identifies retries of the same checkout. The unique user/key index and account serialization prevent duplicate order creation. A source order is validated and linked in the same transaction as its upstream order.
+`checkoutKey` identifies retries of the same checkout. The unique user/key index and account serialization prevent duplicate order creation. A source order is validated when checkout begins; an existing pending checkout blocks duplicate shortage purchases. The source is linked to its upstream order only in the verified-payment transaction.
 
 Collections:
+
+- `paymentcheckouts`: validated server-priced order snapshot, retry key/fingerprint, owner, optional source order, and pending/completed status. These are not orders. No TTL is used because delayed payment notifications must remain recoverable.
 
 - `paymentaccounts`: local payment ledger (with optional historical virtual bank details), unapplied credit, and per-customer serialization revision.
 - `paymentattempts`: durable UPI request IDs, amount, QR/intent, provider status. One active attempt per order; terminal attempts are retained when retrying.
@@ -80,3 +85,9 @@ Paysharp_Test_users=9999999999,8888888888
 Restart the main backend after changing deployment environment variables. No frontend environment variables or phone lists are needed. `GET /api/payments/config` returns only the authenticated account's selected provider, never the allowlist. Both apps use `/api/payments/quote` to obtain server-priced checkout and its selected provider. The server rechecks eligibility when creating an order and rejects stale checkout modes. Proof uploads are required and validated for excluded accounts, without any Paysharp API call. Existing order IDs always retain their original payment method when the switch/list changes; receipt webhooks and existing Paysharp orders remain serviceable.
 
 This controls exposure on your existing environment; it does not change Paysharp API endpoints, credentials, or transaction environment. Keep the selected token and base URL consistent.
+
+## Pay-first verification
+
+The integration suite covers no order/counter/inventory changes before payment, pending/failed/expired notifications, forged success, exact amount/customer verification, concurrent webhook and refresh delivery, rollback and retry after inventory failure, quotation snapshots, and shortage linking only after payment. Historical-order fixtures retain coverage for earlier releases and legacy proof-upload regression tests are unchanged.
+
+The existing `/api/payments/orders/:id` status, refresh and UPI endpoints accept the reserved checkout ID until it becomes a real order ID. Pending responses contain `order: null` and `checkout`; paid responses contain `order`. The UPI webhook URL and environment configuration do not change.
