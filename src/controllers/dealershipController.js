@@ -81,11 +81,11 @@ const getFabricatorDynamicPricing = async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.fabricatorId)) return res.status(400).json({ message: 'Invalid fabricator ID' });
     const fabricator = await User.findOne({ _id: req.params.fabricatorId, accountType: 'FABRICATOR', dealership: dealership._id });
     if (!fabricator) return res.status(404).json({ message: 'Fabricator is not registered under this dealership' });
-    const { hardwareLabels, profileLabels } = await getDynamicPricingLabels();
+    const { profileLabels } = await getDynamicPricingLabels();
     return res.json({
       fabricator: { _id: fabricator._id, name: fabricator.name, email: fabricator.email, phoneNumber: fabricator.phoneNumber },
       dynamicPricing: {
-        hardware: mergePricing(hardwareLabels, fabricator.dynamicPricing?.hardware),
+        hardware: {},
         profiles: mergePricing(profileLabels, fabricator.dynamicPricing?.profiles),
       },
     });
@@ -119,16 +119,16 @@ const updateFabricatorDynamicPricing = async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.fabricatorId)) return res.status(400).json({ message: 'Invalid fabricator ID' });
     const fabricator = await User.findOne({ _id: req.params.fabricatorId, accountType: 'FABRICATOR', dealership: dealership._id });
     if (!fabricator) return res.status(404).json({ message: 'Fabricator is not registered under this dealership' });
-    const hardware = normalizePricingInput(req.body.hardware, 'Hardware');
+    if (!req.body.profiles) return res.status(400).json({ message: 'Profile pricing data is required' });
     const profiles = normalizePricingInput(req.body.profiles, 'Profile');
-    const { hardwareLabels, profileLabels } = await getDynamicPricingLabels();
+    const { profileLabels } = await getDynamicPricingLabels();
     fabricator.dynamicPricing = {
-      hardware: mergePricing(hardwareLabels, hardware),
+      hardware: fabricator.dynamicPricing?.hardware || {},
       profiles: mergePricing(profileLabels, profiles),
     };
     fabricator.markModified('dynamicPricing');
     await fabricator.save();
-    return res.json({ message: `Dynamic pricing updated for ${fabricator.name}`, dynamicPricing: fabricator.dynamicPricing });
+    return res.json({ message: `Dynamic pricing updated for ${fabricator.name}`, dynamicPricing: { hardware: {}, profiles: fabricator.dynamicPricing.profiles } });
   } catch (error) {
     console.error('Error updating fabricator dynamic pricing:', error);
     return res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Unable to update dynamic pricing' });

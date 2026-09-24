@@ -51,7 +51,7 @@ async function catalogPrices(items, user) {
     const hardware = await Hardware.findOne({ $or: [{ sapCode: code }, ...(/^\d+$/.test(code) ? [{ id: Number(code) }] : [])] }).lean();
     let unitPrice, description;
     if (hardware) {
-      unitPrice = hardware.rate + adjustment(user.dynamicPricing?.hardware, [hardware.subCategory]);
+      unitPrice = Number(hardware.rate);
       description = hardware.perticular;
     } else {
       let product = await Product.findOne({ sapCode: code }).lean();
