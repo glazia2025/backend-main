@@ -312,9 +312,9 @@ const createUser = async (req, res) => {
       paUrl = await uploadPartnerAgreement(req.file, primaryPhoneNumber);
     }
 
-    const { hardwareLabels, profileLabels } = await getDynamicPricingLabels();
+    const { profileLabels } = await getDynamicPricingLabels();
     const dynamicPricing = {
-      hardware: mergePricing(hardwareLabels),
+      hardware: {},
       profiles: mergePricing(profileLabels),
     };
 
@@ -386,9 +386,9 @@ const getUser = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const { hardwareLabels, profileLabels } = await getDynamicPricingLabels();
+    const { profileLabels } = await getDynamicPricingLabels();
     const dynamicPricing = {
-      hardware: mergePricing(hardwareLabels, user.dynamicPricing?.hardware),
+      hardware: {},
       profiles: mergePricing(profileLabels, user.dynamicPricing?.profiles),
     };
 
@@ -502,14 +502,14 @@ const getNalcoGraph = async (req, res) => {
 // Update dynamic pricing for a user (Admin only)
 const updateDynamicPricing = async (req, res) => {
   const { userId } = req.params;
-  const { hardware, profiles } = req.body;
+  const { profiles } = req.body;
 
   if (!userId) {
     return res.status(400).json({ message: 'User ID is required' });
   }
 
-  if (!hardware && !profiles) {
-    return res.status(400).json({ message: 'At least one of hardware or profiles pricing data is required' });
+  if (!profiles) {
+    return res.status(400).json({ message: 'Profile pricing data is required' });
   }
 
   try {
@@ -519,7 +519,7 @@ const updateDynamicPricing = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const { hardwareLabels, profileLabels } = await getDynamicPricingLabels();
+    const { profileLabels } = await getDynamicPricingLabels();
 
     // Initialize dynamicPricing if it doesn't exist
     if (!user.dynamicPricing) {
@@ -529,22 +529,7 @@ const updateDynamicPricing = async (req, res) => {
       };
     }
 
-    // Update hardware pricing
-    if (hardware) {
-      if (typeof hardware !== 'object') {
-        return res.status(400).json({ message: 'Hardware pricing must be an object' });
-      }
-      user.dynamicPricing.hardware = mergePricing(
-        hardwareLabels,
-        user.dynamicPricing.hardware,
-        hardware
-      );
-    } else {
-      user.dynamicPricing.hardware = mergePricing(
-        hardwareLabels,
-        user.dynamicPricing.hardware
-      );
-    }
+    // Legacy hardware adjustments are retained in storage but never applied or updated.
 
     // Update profiles pricing
     if (profiles) {
@@ -567,7 +552,7 @@ const updateDynamicPricing = async (req, res) => {
 
     res.status(200).json({
       message: 'Dynamic pricing updated successfully',
-      dynamicPricing: user.dynamicPricing
+      dynamicPricing: { hardware: {}, profiles: user.dynamicPricing.profiles }
     });
   } catch (error) {
     console.error('Error updating dynamic pricing:', error);
@@ -590,9 +575,9 @@ const getDynamicPricing = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const { hardwareLabels, profileLabels } = await getDynamicPricingLabels();
+    const { profileLabels } = await getDynamicPricingLabels();
     const dynamicPricing = {
-      hardware: mergePricing(hardwareLabels, user.dynamicPricing?.hardware),
+      hardware: {},
       profiles: mergePricing(profileLabels, user.dynamicPricing?.profiles),
     };
 

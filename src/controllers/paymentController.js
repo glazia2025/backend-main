@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const crypto = require('crypto');
 const User = require('../models/User');
 const { UserOrder } = require('../models/Order');
-const { PaymentAccount, PaymentReceipt, PaymentAttempt } = require('../models/Payment');
+const { PaymentAccount, PaymentReceipt, PaymentAttempt, PaymentCheckout } = require('../models/Payment');
 const payments = require('../services/paymentService');
 const { priceOrder } = require('../services/orderPricingService');
 const { extractAuthToken } = require('../utils/authCookies');
@@ -24,10 +24,14 @@ const buyer = async req => {
 const ownedOrder = async req => {
   if (!mongoose.isValidObjectId(req.params.orderId)) throw fail('Invalid order ID');
   const order = await UserOrder.findOne({ _id: req.params.orderId, 'user.userId': req.user.userId, paymentProvider: 'PAYSHARP' });
-  if (!order) throw fail('Order not found', 404);
-  return order;
+  if (order) return order;
+  const checkout = await PaymentCheckout.findOne({ _id: req.params.orderId, user: req.user.userId, status: 'PENDING' });
+  if (!checkout) throw fail('Order or checkout not found', 404);
+  return { ...checkout.orderSnapshot, _id: checkout._id, isCheckout: true };
 };
 const upiCheckoutEnabled = (user, totalPaise) => paysharpEnabled(user) && totalPaise >= 100 && upiAllowed(totalPaise);
+const pendingSummary = checkout => summary({ ...checkout.orderSnapshot, _id: checkout._id });
+const resultBody = result => result.orderSnapshot ? { order: null, checkout: pendingSummary(result) } : { order: summary(result) };
 const summary = order => ({ paymentProvider: order.paymentProvider || 'LEGACY', _id: order._id, orderId: order.orderId, totalPaise: order.totalPaise, paidPaise: order.paidPaise,
   paymentStatus: order.paymentStatus, upiAllowed: upiAllowed(order.totalPaise) && order.totalPaise - order.paidPaise >= 100, isComplete: order.isComplete });
 exports.config = wrap(async (req, res) => {
@@ -52,6 +56,11 @@ exports.createOrder = wrap(async (req, res) => {
     if (existing.checkoutFingerprint !== fingerprint) throw fail('Checkout key belongs to a different order', 409);
     return res.json({ order: summary(existing) });
   }
+  const pending = await PaymentCheckout.findOne({ user: user._id, checkoutKey: key, status: 'PENDING' });
+  if (pending) {
+    if (pending.checkoutFingerprint !== fingerprint) throw fail('Checkout key belongs to a different order', 409);
+    return res.json(resultBody(pending));
+  }
   const pricing = await priceOrder(req.body, user, extractAuthToken(req));
   if (pricing.totalPaise !== req.body.expectedTotalPaise) throw fail('Prices have changed. Review the updated total and try again.', 409);
   const enabled = upiCheckoutEnabled(user, pricing.totalPaise);
@@ -65,15 +74,23 @@ exports.createOrder = wrap(async (req, res) => {
   const account = enabled ? await payments.ensureLedger(user) : null;
   let result;
   await mongoose.connection.transaction(async session => {
-    const locked = account ? await PaymentAccount.findOneAndUpdate({ _id: account._id }, { $inc: { revision: 1 } }, { session, new: true }) : null;
-    if (!enabled) await User.updateOne({ _id: user._id }, { $inc: { paymentRevision: 1 } }, { session });
+    if (account) await PaymentAccount.findOneAndUpdate({ _id: account._id }, { $inc: { revision: 1 } }, { session, new: true });
+    await User.updateOne({ _id: user._id }, { $inc: { paymentRevision: 1 } }, { session });
     const retry = await UserOrder.findOne({ 'user.userId': user._id, checkoutKey: key }).session(session);
     if (retry) {
       if (retry.checkoutFingerprint !== fingerprint) throw fail('Checkout key belongs to a different order', 409);
       result = retry; return;
     }
+    const pendingRetry = await PaymentCheckout.findOne({ user: user._id, checkoutKey: key, status: 'PENDING' }).session(session);
+    if (pendingRetry) {
+      if (pendingRetry.checkoutFingerprint !== fingerprint) throw fail('Checkout key belongs to a different order', 409);
+      result = pendingRetry; return;
+    }
     let source;
     if (pricing.sourceOrder) {
+      if (await PaymentCheckout.exists({ sourceOrder: pricing.sourceOrder, status: 'PENDING' }).session(session)) {
+        throw fail('A payment checkout already exists for this shortage. Resume that checkout.', 409);
+      }
       source = await UserOrder.findOne({ _id: pricing.sourceOrder, dealership: user._id, upstreamOrder: null, 'fulfillment.status': 'GLAZIA_VIA_DEALER', isComplete: false }).session(session);
       if (!source) throw fail('A Glazia order already exists or this shortage is no longer available', 409);
       if (source.paymentProvider === 'PAYSHARP' && source.paymentStatus !== 'PAID') throw fail('The original order must be paid first', 409);
@@ -91,10 +108,18 @@ exports.createOrder = wrap(async (req, res) => {
       inventoryDisposition: user.accountType === 'DEALERSHIP' ? 'ADD_TO_DEALER_STOCK' : 'DIRECT_TO_FABRICATOR',
       deliveryAddress: { name: user.name, phoneNumber: user.phoneNumber, address: user.address, city: user.city, state: user.state, pincode: user.pincode },
     });
+    if (enabled) {
+      // Validation runs now, but no order number, stock movement or order is saved.
+      await order.validate();
+      const [checkout] = await PaymentCheckout.create([{
+        _id: order._id, user: user._id, checkoutKey: key, checkoutFingerprint: fingerprint,
+        orderSnapshot: order.toObject(), sourceOrder: source?._id,
+      }], { session });
+      result = checkout; return;
+    }
     await order.save({ session });
     if (source) { source.upstreamOrder = order._id; await source.save({ session }); }
-    if (enabled) await payments.allocateCredit(locked, session);
-    else if (user.accountType !== 'DEALERSHIP' && dealership) {
+    if (user.accountType !== 'DEALERSHIP' && dealership) {
       const stock = await consumeStock(dealership, order.products, order._id, session);
       order.fulfillment.status = stock.fulfilledFromStock ? 'DEALER_STOCK' : 'GLAZIA_VIA_DEALER';
       order.fulfillment.remainingProducts = stock.remainingProducts;
@@ -105,7 +130,7 @@ exports.createOrder = wrap(async (req, res) => {
     }
     result = await UserOrder.findById(order._id).session(session);
   });
-  res.status(201).json({ order: summary(result) });
+  res.status(201).json(resultBody(result));
 });
 exports.status = wrap(async (req, res) => {
   let order = await ownedOrder(req);
@@ -120,7 +145,7 @@ exports.status = wrap(async (req, res) => {
   const account = await PaymentAccount.findOne({ user: req.user.userId });
   const receipts = await PaymentReceipt.find({ 'allocations.order': order._id }).select('reference method utr receivedAt allocations amountPaise').lean();
   const latestAttempt = await PaymentAttempt.findOne({ order: order._id, active: true }).select('status').lean();
-  res.json({ order: summary(order), upiStatus: latestAttempt?.status, account: account ? payments.accountView(account) : null,
+  res.json({ order: order.isCheckout ? null : summary(order), ...(order.isCheckout ? { checkout: summary(order) } : {}), upiStatus: latestAttempt?.status, account: account ? payments.accountView(account) : null,
     receipts: receipts.map(r => ({ reference: r.reference, method: r.method, utr: r.utr, receivedAt: r.receivedAt,
       amountPaise: r.allocations.filter(a => String(a.order) === String(order._id)).reduce((sum, a) => sum + a.amountPaise, 0) })) });
 });

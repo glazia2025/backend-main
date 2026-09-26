@@ -34,8 +34,28 @@ async function priceOrder(body, user, token) {
       });
       data = response.data;
     } catch (_) { throw fail('Unable to price this quotation. Save it and retry.', 502); }
-    const products = (data.rows || []).map(row => ({ productId: row.itemCode, description: row.description, quantity: Number(row.quantity), amount: Number(row.amount) }));
-    return { products, ...payable(products), quotationId: body.quotationId, quotationCode: data.projectCode };
+  
+  const products = (data.rows || [])
+  .map(row => ({
+    productId: row.itemCode,
+    description: row.description,
+    quantity: Number(row.quantity),
+    amount: Number(row.amount)
+  }))
+  .filter(product =>
+    String(product.productId || '').trim() &&
+    Number.isFinite(product.quantity) &&
+    product.quantity > 0 &&
+    Number.isFinite(product.amount) &&
+    product.amount > 0
+  );
+
+return {
+  products,
+  ...payable(products),
+  quotationId: body.quotationId,
+  quotationCode: data.projectCode
+};
   }
   const products = await catalogPrices(body.products, user);
   return { products, ...payable(products) };
@@ -51,7 +71,7 @@ async function catalogPrices(items, user) {
     const hardware = await Hardware.findOne({ $or: [{ sapCode: code }, ...(/^\d+$/.test(code) ? [{ id: Number(code) }] : [])] }).lean();
     let unitPrice, description;
     if (hardware) {
-      unitPrice = hardware.rate + adjustment(user.dynamicPricing?.hardware, [hardware.subCategory]);
+      unitPrice = Number(hardware.rate);
       description = hardware.perticular;
     } else {
       let product = await Product.findOne({ sapCode: code }).lean();
