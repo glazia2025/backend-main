@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const { UserOrder } = require('../models/Order');
 const { DealershipInventory, InventoryMovement } = require('../models/DealershipInventory');
-const { uploadPartnerAgreement,uploadInventoryImage, getDynamicPricingLabels, mergePricing } = require('./userController');
+const { uploadPartnerAgreement,uploadInventoryImage, getDynamicPricingLabels, mergePricing, createPaySharpVirtualAccount} = require('./userController');
 const StockAdjustmentRequest = require('../models/StockAdjustmentRequest');
 
 const getDealership = async (req, res) => {
@@ -66,6 +66,14 @@ const registerFabricator = async (req, res) => {
         version: process.env.PARTNER_AGREEMENT_VERSION || '1.0',
       },
     });
+    try {
+  await createPaySharpVirtualAccount(fabricator);
+} catch (vaError) {
+  console.error(
+    'Virtual account creation failed for dealership fabricator:',
+    vaError.response?.data || vaError.message
+  );
+}
     res.status(201).json({ message: 'Fabricator registered successfully', fabricator });
   } catch (error) {
     console.error('Error registering fabricator:', error);
