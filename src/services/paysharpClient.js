@@ -18,6 +18,7 @@ const request = async (kind, method, path, data) => {
     return response.data.data;
   } catch (error) {
     // Never propagate Axios config/headers (which contain the merchant token).
+    console.log('Paysharp Error', error);
     throw Object.assign(fail(error.status ? error.message : 'Payment provider is unavailable. Please retry.', error.status || 502), {
       providerCode: error.providerCode || error.response?.data?.errorCode,
     });
