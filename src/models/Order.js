@@ -58,6 +58,10 @@ const userOrderSchema = new mongoose.Schema(
       description: { type: String },
     },
     taxInvoice: { type: String },
+    dispatchProofPhotos: {
+    type: [String],
+    default: [],
+    },
     isComplete: { type: Boolean, default: false },
     completedAt: { type: Date },
     deliveryType: {

@@ -9,6 +9,7 @@ const { consumeStock, addStock } = require("../services/dealershipInventoryServi
 const {
   addDeliveredProductsToFabricatorInventory,
 } = require("../services/fabricatorInventoryService");
+const { uploadDispatchProofPhotos } = require("./userController");
 
 const createOrder = require('./paymentController').createOrder;
 
@@ -328,7 +329,21 @@ const order = await UserOrder.findOne(orderQuery);
 };
 
 const completeOrder = async (req, res) => {
-  const { orderId, biltyDoc, eWayBill, driverInfo, taxInvoice } = req.body;
+  // const { orderId, biltyDoc, eWayBill, driverInfo, taxInvoice } = req.body;
+
+  const { orderId, biltyDoc, eWayBill, taxInvoice } = req.body;
+
+let { driverInfo } = req.body;
+
+if (typeof driverInfo === "string") {
+  try {
+    driverInfo = JSON.parse(driverInfo);
+  } catch (error) {
+    return res.status(400).json({
+      message: "Invalid driver information.",
+    });
+  }
+}
 
   if (!orderId || !biltyDoc || !eWayBill || !driverInfo || !taxInvoice) {
     return res
@@ -355,10 +370,39 @@ const order = await UserOrder.findOne(orderQuery);
         message: "Order cannot be found.",
       });
     }
+    const dispatchProofPhotos = req.files || [];
+
+if (dispatchProofPhotos.length < 1) {
+  return res.status(400).json({
+    message: "At least one dispatch proof photo is required.",
+  });
+}
+
+if (dispatchProofPhotos.length > 3) {
+  return res.status(400).json({
+    message: "Maximum 3 dispatch proof photos are allowed.",
+  });
+}
+
+const uploadedDispatchProofPhotos =
+  await uploadDispatchProofPhotos(
+    dispatchProofPhotos,
+    order.orderId
+  );
 
     if (order.paymentProvider === 'PAYSHARP') {
       try {
-        const updated = await require('../services/completePaidOrder').completePaidOrder(order._id, req.body);
+        // const updated = await require('../services/completePaidOrder').completePaidOrder(order._id, req.body);
+
+        const updated =
+  await require("../services/completePaidOrder").completePaidOrder(
+    order._id,
+    {
+      ...req.body,
+      driverInfo,
+      dispatchProofPhotos: uploadedDispatchProofPhotos,
+    }
+  );
         return res.json({ message: 'Order completed successfully.', order: updated });
       } catch (error) {
         return res.status(error.status || 500).json({ message: error.status ? error.message : 'Unable to complete order' });
@@ -406,6 +450,7 @@ const order = await UserOrder.findOne(orderQuery);
       phone: driverInfo.phone,
     };
     order.taxInvoice = taxInvoice;
+    order.dispatchProofPhotos = uploadedDispatchProofPhotos;
     order.isComplete = true;
     order.completedAt = new Date();
     order.updatedAt = new Date();
