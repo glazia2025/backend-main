@@ -42,6 +42,39 @@ const userSchema = new mongoose.Schema({
     version: { type: String, default: '1.0' }
   },
   paUrl: {type: String, required: false, default: null, unique: true},
+  virtualAccount: {
+  virtualAccountNo: {
+    type: String,
+    default: null
+  },
+  ifscCode: {
+    type: String,
+    default: null
+  },
+  beneficiaryName: {
+    type: String,
+    default: null
+  },
+  bankName: {
+    type: String,
+    default: null
+  }
+},
+
+whitelistedRemitters: [{
+  accountName: {
+    type: String,
+    default: ''
+  },
+  accountNo: {
+    type: String,
+    default: ''
+  },
+  ifscCode: {
+    type: String,
+    default: ''
+  }
+}],
   dynamicPricing: {
     type: {
       hardware: {

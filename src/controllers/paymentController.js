@@ -37,9 +37,19 @@ const summary = order => ({ paymentProvider: order.paymentProvider || 'LEGACY', 
 exports.config = wrap(async (req, res) => {
   res.json({ paymentProvider: paysharpEnabled(await buyer(req)) ? 'PAYSHARP' : 'LEGACY', virtualAccountEnabled: false });
 });
+// exports.account = wrap(async (req, res) => {
+//   await buyer(req);
+//   throw fail('Virtual-account payments are not available during the UPI-only rollout', 403);
+// });
+
 exports.account = wrap(async (req, res) => {
-  await buyer(req);
-  throw fail('Virtual-account payments are not available during the UPI-only rollout', 403);
+  const user = await buyer(req);
+
+  const account = await payments.ensureAccount(user);
+
+  res.json({
+    account: payments.accountView(account),
+  });
 });
 exports.quote = wrap(async (req, res) => {
   const user = await buyer(req);
@@ -163,7 +173,10 @@ exports.upiWebhook = wrap(async (req, res) => {
   res.json({ code: 200, message: 'success' });
 });
 exports.bankWebhook = wrap(async (req, res) => {
+  console.log("========== PAYSHARP BANK WEBHOOK HIT ==========");
+  console.log("WEBHOOK BODY:", JSON.stringify(req.body, null, 2));
   await payments.verifyBank(req.body.paysharpReferenceNo);
+  console.log("========== BANK WEBHOOK PROCESSED ==========");
   res.json({ code: 200, message: 'success' });
 });
 exports.reconcile = exports.bankWebhook;

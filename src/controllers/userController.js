@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const axios = require('axios');
 const {
   S3Client,
   PutObjectCommand,
@@ -343,6 +344,15 @@ const createUser = async (req, res) => {
 
     // Save the new user
     await newUser.save();
+    // Automatically create PaySharp virtual account for new user
+try {
+  await createPaySharpVirtualAccount(newUser);
+} catch (vaError) {
+  console.error(
+    'Virtual account creation failed for new user:',
+    vaError.response?.data || vaError.message
+  );
+}
 
     // Generate a JWT token for the new user
     const token = signJwt(
@@ -610,6 +620,8 @@ const listUsers = async (req, res) => {
       dealership: 1,
       partnerAgreement: 1,
       disabledModules: 1,
+      virtualAccount: 1,
+      whitelistedRemitters: 1,
     }).sort({ name: 1 });
 
     res.status(200).json({ users });
@@ -618,6 +630,213 @@ const listUsers = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
+const createPaySharpVirtualAccount = async (user, whitelistedRemitters = []) => {
+  const externalCustomerId = user._id.toString();
+
+  const payload = {
+    externalCustomerId,
+    name: user.name,
+    mobileNo: user.phoneNumber,
+    email: user.email,
+    whitelistedRemitters: Array.isArray(whitelistedRemitters)
+      ? whitelistedRemitters
+      : []
+  };
+
+  const response = await axios.post(
+    `${process.env.PAYSHARP_VA_BASE_URL}/customers`,
+    payload,
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.PAYSHARP_API_TOKEN}`
+      }
+    }
+  );
+
+  const vaData = response.data.data;
+
+  user.virtualAccount = {
+    virtualAccountNo: vaData.virtualAccountNo || null,
+    ifscCode: vaData.ifscCode || null,
+    beneficiaryName: vaData.beneficiaryName || null,
+    bankName: vaData.bankName || null
+  };
+
+  user.whitelistedRemitters = payload.whitelistedRemitters;
+
+  await user.save();
+
+  return {
+    virtualAccount: user.virtualAccount,
+    whitelistedRemitters: user.whitelistedRemitters
+  };
+};
+
+const createVirtualAccount = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { whitelistedRemitters } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await User.findOne({
+      _id: userId,
+      accountType: { $ne: 'ADMIN' }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        message: 'User not found'
+      });
+    }
+
+    // VA already exists
+    if (user.virtualAccount?.virtualAccountNo) {
+      return res.status(409).json({
+        message: 'Virtual account already exists',
+        virtualAccount: user.virtualAccount
+      });
+    }
+
+    // Create VA using reusable PaySharp function
+    const result = await createPaySharpVirtualAccount(
+      user,
+      whitelistedRemitters
+    );
+
+    return res.status(201).json({
+      message: 'Virtual account created successfully',
+      virtualAccount: result.virtualAccount,
+      whitelistedRemitters: result.whitelistedRemitters
+    });
+
+  } catch (error) {
+    console.error(
+      'Error creating virtual account:',
+      error.response?.data || error.message
+    );
+
+    if (error?.name === 'CastError') {
+      return res.status(400).json({
+        message: 'Invalid user ID'
+      });
+    }
+
+    return res.status(error.response?.status || 500).json({
+      message:
+        error.response?.data?.message ||
+        'Unable to create virtual account'
+    });
+  }
+};
+const updateVirtualAccountDetails = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { whitelistedRemitters } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        message: "User ID is required"
+      });
+    }
+
+    if (!Array.isArray(whitelistedRemitters)) {
+      return res.status(400).json({
+        message: "Whitelisted remitters must be an array"
+      });
+    }
+
+    if (whitelistedRemitters.length > 5) {
+      return res.status(400).json({
+        message: "Maximum 5 whitelisted remitters are allowed"
+      });
+    }
+
+    const user = await User.findOne({
+      _id: userId,
+      accountType: { $ne: "ADMIN" }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found"
+      });
+    }
+
+    if (!user.virtualAccount?.virtualAccountNo) {
+      return res.status(400).json({
+        message: "Virtual account does not exist"
+      });
+    }
+
+    const externalCustomerId = user._id.toString();
+
+    const cleanWhitelistedRemitters = whitelistedRemitters.map(
+  ({ accountName, accountNo, ifscCode }) => ({
+    accountName,
+    accountNo,
+    ifscCode
+  })
+);
+
+const payload = {
+  name: user.name,
+  mobileNo: user.phoneNumber,
+  email: user.email,
+  whitelistedRemitters: cleanWhitelistedRemitters
+};
+
+    const response = await axios.put(
+      `${process.env.PAYSHARP_VA_BASE_URL}/customers/${externalCustomerId}`,
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.PAYSHARP_API_TOKEN}`
+        }
+      }
+    );
+
+    const vaData = response.data.data;
+
+    // user.whitelistedRemitters =
+    //   vaData.whitelistedRemitters || whitelistedRemitters;
+    user.whitelistedRemitters =
+  vaData.whitelistedRemitters || cleanWhitelistedRemitters;
+
+    await user.save();
+
+    return res.status(200).json({
+      message: "Virtual account details updated successfully",
+      virtualAccount: user.virtualAccount,
+      whitelistedRemitters: user.whitelistedRemitters
+    });
+
+  } catch (error) {
+    console.error(
+      "Error updating virtual account details:",
+      error.response?.data || error.message
+    );
+
+    if (error?.name === "CastError") {
+      return res.status(400).json({
+        message: "Invalid user ID"
+      });
+    }
+
+    return res.status(error.response?.status || 500).json({
+      message:
+        error.response?.data?.message ||
+        "Unable to update virtual account details"
+    });
+  }
+};
+
 
 const createTransporter = () => {
   return nodemailer.createTransport({
@@ -686,4 +905,4 @@ const sendContactMail = async (firstName, lastName, email, phoneNumber, company,
 };
 
 
-module.exports = { createUser, getUser, updateUser, deleteUser, updateUserModuleAccess, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement,uploadInventoryImage, getDynamicPricingLabels, mergePricing };
+module.exports = { createUser, getUser, updateUser, deleteUser, updateUserModuleAccess,createVirtualAccount,createPaySharpVirtualAccount,updateVirtualAccountDetails, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement,uploadInventoryImage, getDynamicPricingLabels, mergePricing };
