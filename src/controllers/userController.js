@@ -643,6 +643,8 @@ const createPaySharpVirtualAccount = async (user, whitelistedRemitters = []) => 
       : []
   };
 
+  console.log('Create Virtual Account Payload', payload);
+
   const vaData = await paysharpClient.request('va', 'POST', '/customers', payload);
 
   user.virtualAccount = {
