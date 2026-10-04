@@ -1,5 +1,5 @@
 const nodemailer = require('nodemailer');
-const axios = require('axios');
+const paysharpClient = require('../services/paysharpClient');
 const {
   S3Client,
   PutObjectCommand,
@@ -643,18 +643,7 @@ const createPaySharpVirtualAccount = async (user, whitelistedRemitters = []) => 
       : []
   };
 
-  const response = await axios.post(
-    `${process.env.PAYSHARP_VA_BASE_URL}/customers`,
-    payload,
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.PAYSHARP_API_TOKEN}`
-      }
-    }
-  );
-
-  const vaData = response.data.data;
+  const vaData = await paysharpClient.request('va', 'POST', '/customers', payload);
 
   user.virtualAccount = {
     virtualAccountNo: vaData.virtualAccountNo || null,
@@ -727,9 +716,9 @@ const createVirtualAccount = async (req, res) => {
       });
     }
 
-    return res.status(error.response?.status || 500).json({
+    return res.status(error.status || 500).json({
       message:
-        error.response?.data?.message ||
+        (error.status && error.message) ||
         'Unable to create virtual account'
     });
   }
@@ -791,18 +780,9 @@ const payload = {
   whitelistedRemitters: cleanWhitelistedRemitters
 };
 
-    const response = await axios.put(
-      `${process.env.PAYSHARP_VA_BASE_URL}/customers/${externalCustomerId}`,
-      payload,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${process.env.PAYSHARP_API_TOKEN}`
-        }
-      }
+    const vaData = await paysharpClient.request(
+      'va', 'PUT', `/customers/${externalCustomerId}`, payload
     );
-
-    const vaData = response.data.data;
 
     // user.whitelistedRemitters =
     //   vaData.whitelistedRemitters || whitelistedRemitters;
@@ -829,9 +809,9 @@ const payload = {
       });
     }
 
-    return res.status(error.response?.status || 500).json({
+    return res.status(error.status || 500).json({
       message:
-        error.response?.data?.message ||
+        (error.status && error.message) ||
         "Unable to update virtual account details"
     });
   }
