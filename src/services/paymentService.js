@@ -84,50 +84,6 @@ async function allocateCredit(account, session, preferredOrderId) {
   account.creditPaise = receipts.reduce((sum, r) => sum + r.unallocatedPaise, 0);
   await account.save({ session });
 }
-// async function recordReceipt(data, method, attempt) {
-//   const customerId = method === 'UPI' ? data.customerId : data.externalCustomerId;
-//   const account = await PaymentAccount.findOne({ externalCustomerId: String(customerId) });
-//   if (!account) throw fail('Payment account not found', 404);
-//   if (method === 'BANK_TRANSFER' && data.virtualAccountNo !== account.virtualAccountNo) throw fail('Virtual account mismatch', 409);
-//   const amount = paise(data.amount);
-//   if (!amount || !data.paysharpReferenceNo || !data.utrNumber || !Number.isFinite(Date.parse(data.transactionDate))) throw fail('Incomplete payment confirmation', 502);
-//   if (attempt && (String(attempt.user) !== String(account.user) || amount !== attempt.amountPaise || data.orderId !== String(attempt._id))) throw fail('Payment confirmation does not match the payment request', 409);
-//   await mongoose.connection.transaction(async session => {
-//     const locked = await PaymentAccount.findOneAndUpdate({ _id: account._id }, { $inc: { revision: 1 } }, { new: true, session });
-//     const existing = await PaymentReceipt.findOne({ reference: data.paysharpReferenceNo }).session(session);
-//     if (existing) {
-//       if (String(existing.user) !== String(account.user) || existing.amountPaise !== amount || existing.method !== method) throw fail('Conflicting payment reference', 409);
-//       return;
-//     }
-//     if (attempt?.checkout) {
-//       const checkout = await PaymentCheckout.findById(attempt.checkout).session(session);
-//       if (!checkout || String(checkout.user) !== String(account.user)) throw fail('Payment checkout not found', 409);
-//       if (checkout.orderSnapshot.totalPaise !== amount) throw fail('Payment does not match checkout total', 409);
-//       if (checkout.status === 'PENDING') {
-//         // Serialize against concurrent new checkout/legacy order creation for this user.
-//         await User.updateOne({ _id: checkout.user }, { $inc: { paymentRevision: 1 } }, { session });
-//         const order = new UserOrder(checkout.orderSnapshot);
-//         if (checkout.sourceOrder) {
-//           const source = await UserOrder.findOne({ _id: checkout.sourceOrder, dealership: checkout.user,
-//             upstreamOrder: null, 'fulfillment.status': 'GLAZIA_VIA_DEALER', isComplete: false }).session(session);
-//           if (!source) throw fail('The shortage order has changed. Contact Glazia to reconcile this payment.', 409);
-//           source.upstreamOrder = order._id;
-//           await source.save({ session });
-//         }
-//         await order.save({ session });
-//         checkout.status = 'COMPLETED'; checkout.completedAt = new Date();
-//         await checkout.save({ session });
-//       }
-//     }
-//     await PaymentReceipt.create([{
-//       reference: data.paysharpReferenceNo, user: account.user, method, amountPaise: amount,
-//       feePaise: paise(data.totalFee || 0), netPaise: paise(data.netAmount ?? data.amount),
-//       utr: data.utrNumber, receivedAt: new Date(data.transactionDate), unallocatedPaise: amount,
-//     }], { session });
-//     if (attempt) await PaymentAttempt.updateOne({ _id: attempt._id }, { $set: { status: 'SUCCESS', reference: data.paysharpReferenceNo } }, { session });
-//     await allocateCredit(locked, session, attempt?.order);
-//   });
-// }
 
 async function recordReceipt(data, method, attempt) {
   const customerId = method === 'UPI' ? data.customerId : data.externalCustomerId;
@@ -316,12 +272,6 @@ async function verifyUpi(attempt) {
   } else throw fail('Unknown payment status', 502);
   return data;
 }
-// async function verifyBank(reference) {
-//   if (typeof reference !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(reference)) throw fail('Invalid payment reference');
-//   const data = await provider.request('va', 'GET', `/transactions/${encodeURIComponent(reference)}`);
-//   if (data.paysharpReferenceNo !== reference) throw fail('Payment reference mismatch', 409);
-//   await recordReceipt(data, 'BANK_TRANSFER');
-// }
 
 async function verifyBank(reference) {
   if (
