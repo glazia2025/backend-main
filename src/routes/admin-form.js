@@ -50,6 +50,22 @@ const agreementUpload = multer({
   fileFilter: (_req, file, callback) => callback(file.mimetype === 'application/pdf' ? null : new Error('Only PDF files are allowed'), file.mimetype === 'application/pdf'),
 });
 
+const dispatchProofUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    files: 3,
+    fileSize: 10 * 1024 * 1024,
+    fieldSize: 50 * 1024 * 1024,
+  },
+  fileFilter: (_req, file, callback) => {
+    if (file.mimetype.startsWith("image/")) {
+      callback(null, true);
+    } else {
+      callback(new Error("Only image files are allowed"));
+    }
+  },
+});
+
 router.post("/add-product", can('PRODUCTS'), addProduct);
 router.post("/add-hardware", can('PRODUCTS'), addHardware);
 router.get("/getHardwares", getHardwares);
@@ -87,23 +103,20 @@ router.get("/nalco-broadcast", can("USERS"), nalcoBroadcast.getStatus);
 router.post("/nalco-broadcast", can("USERS"), nalcoBroadcast.send);
 router.post("/update-nalco", can('PRODUCTS'), updateNalco);
 router.get("/get-tech-sheet", isUser, getTechSheet);
-// router.post("/approve-payment", can('ORDERS'), approvePayment);
 router.post(
   "/approve-payment",
   isAdmin.isAdminOrDealership,
   approvePayment
 );
-// router.post("/update-payment-due-date", can('ORDERS'), updatePaymentDueDate);
 router.post(
   "/update-payment-due-date",
   isAdmin.isAdminOrDealership,
   updatePaymentDueDate
 );
-// router.post("/complete-order", can('ORDERS'), express.json({ limit: "50mb" }), completeOrder);
 router.post(
   "/complete-order",
   isAdmin.isAdminOrDealership,
-  express.json({ limit: "50mb" }),
+  dispatchProofUpload.array("dispatchProofPhotos", 3),
   completeOrder
 );
 router.post("/toggle-profile-availability", can('PRODUCTS'), toggleProfileAvailability);

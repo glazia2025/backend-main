@@ -29,7 +29,7 @@ async function completePaidOrder(id, documents) {
       await addDeliveredProductsToFabricatorInventory(fabricator._id, order.products, order._id, session);
       order.fabricatorInventoryProcessedAt = new Date();
     }
-    for (const key of ['biltyDoc', 'eWayBill', 'taxInvoice', 'driverInfo']) order[key] = documents[key];
+    for (const key of ['biltyDoc', 'eWayBill', 'taxInvoice', 'driverInfo','dispatchProofPhotos']) order[key] = documents[key];
     order.isComplete = true; order.completedAt = new Date();
     await order.save({ session }); result = order;
   });

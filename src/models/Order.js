@@ -58,6 +58,10 @@ const userOrderSchema = new mongoose.Schema(
       description: { type: String },
     },
     taxInvoice: { type: String },
+    dispatchProofPhotos: {
+      type: [String],
+      default: [],
+    },
     isComplete: { type: Boolean, default: false },
     completedAt: { type: Date },
     deliveryType: {
@@ -76,9 +80,9 @@ const userOrderSchema = new mongoose.Schema(
       decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
       notes: { type: String, default: "" },
       remainingProducts: {
-    type: [orderSchema],
-    default: [],
-  },
+        type: [orderSchema],
+        default: [],
+      },
     },
     orderChannel: {
       type: String,
@@ -92,9 +96,9 @@ const userOrderSchema = new mongoose.Schema(
     },
     inventoryProcessedAt: { type: Date, default: null },
     fabricatorInventoryProcessedAt: {
-  type: Date,
-  default: null,
-},
+      type: Date,
+      default: null,
+    },
     sourceOrder: { type: mongoose.Schema.Types.ObjectId, ref: "UserOrder", default: null },
     upstreamOrder: { type: mongoose.Schema.Types.ObjectId, ref: "UserOrder", default: null },
     deliveryAddress: {

@@ -187,11 +187,11 @@ const uploadInventoryImage = async (file, fabricatorId) => {
   const bucket = process.env.AWS_S3_BUCKET;
   const region = process.env.AWS_REGION;
   console.log('S3 CONFIG CHECK:', {
-  bucket: bucket || 'MISSING',
-  region: region || 'MISSING',
-  accessKey: process.env.AWS_ACCESS_KEY_ID ? 'PRESENT' : 'MISSING',
-  secretKey: process.env.AWS_SECRET_ACCESS_KEY ? 'PRESENT' : 'MISSING',
-});
+    bucket: bucket || 'MISSING',
+    region: region || 'MISSING',
+    accessKey: process.env.AWS_ACCESS_KEY_ID ? 'PRESENT' : 'MISSING',
+    secretKey: process.env.AWS_SECRET_ACCESS_KEY ? 'PRESENT' : 'MISSING',
+  });
 
   if (!bucket || !region) {
     throw new Error('S3 is not configured');
@@ -211,8 +211,54 @@ const uploadInventoryImage = async (file, fabricatorId) => {
     })
   );
 
- return `https://${bucket}.s3.${region}.amazonaws.com/${objectKey}`;
+  return `https://${bucket}.s3.${region}.amazonaws.com/${objectKey}`;
 };
+
+const uploadDispatchProofPhotos = async (files, orderId) => {
+  if (!files || !files.length) {
+    throw new Error("At least one dispatch proof photo is required");
+  }
+
+  if (files.length > 3) {
+    throw new Error("Maximum 3 dispatch proof photos are allowed");
+  }
+
+  const bucket = process.env.AWS_DISPATCH_S3_BUCKET;
+  const region = process.env.AWS_REGION;
+
+  if (!bucket || !region) {
+    throw new Error("S3 is not configured");
+  }
+
+  const uploadedPhotos = [];
+
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
+
+    const ext =
+      path.extname(file.originalname || "").toLowerCase() || ".jpg";
+
+    const objectKey = `${orderId}/photo-${index + 1}-${crypto.randomUUID()}${ext}`;
+
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: objectKey,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+        ACL: "public-read",
+      })
+    );
+
+    const photoUrl = `https://${bucket}.s3.${region}.amazonaws.com/${objectKey}`;
+
+    uploadedPhotos.push(photoUrl);
+  }
+
+  return uploadedPhotos;
+};
+
+
 
 const deletePartnerAgreementByUrl = async (bucket, paUrl) => {
   const publicBaseUrl = String(process.env.AWS_S3_BASE_URL || '').replace(/\/+$/, '');
@@ -345,14 +391,14 @@ const createUser = async (req, res) => {
     // Save the new user
     await newUser.save();
     // Automatically create PaySharp virtual account for new user
-try {
-  await createPaySharpVirtualAccount(newUser);
-} catch (vaError) {
-  console.error(
-    'Virtual account creation failed for new user:',
-    vaError.response?.data || vaError.message
-  );
-}
+    try {
+      await createPaySharpVirtualAccount(newUser);
+    } catch (vaError) {
+      console.error(
+        'Virtual account creation failed for new user:',
+        vaError.response?.data || vaError.message
+      );
+    }
 
     // Generate a JWT token for the new user
     const token = signJwt(
@@ -768,19 +814,19 @@ const updateVirtualAccountDetails = async (req, res) => {
     const externalCustomerId = user._id.toString();
 
     const cleanWhitelistedRemitters = whitelistedRemitters.map(
-  ({ accountName, accountNo, ifscCode }) => ({
-    accountName,
-    accountNo,
-    ifscCode
-  })
-);
+      ({ accountName, accountNo, ifscCode }) => ({
+        accountName,
+        accountNo,
+        ifscCode
+      })
+    );
 
-const payload = {
-  name: user.name,
-  mobileNo: user.phoneNumber,
-  email: user.email,
-  whitelistedRemitters: cleanWhitelistedRemitters
-};
+    const payload = {
+      name: user.name,
+      mobileNo: user.phoneNumber,
+      email: user.email,
+      whitelistedRemitters: cleanWhitelistedRemitters
+    };
 
     const vaData = await paysharpClient.request(
       'va', 'PUT', `/customers/${externalCustomerId}`, payload
@@ -789,7 +835,7 @@ const payload = {
     // user.whitelistedRemitters =
     //   vaData.whitelistedRemitters || whitelistedRemitters;
     user.whitelistedRemitters =
-  vaData.whitelistedRemitters || cleanWhitelistedRemitters;
+      vaData.whitelistedRemitters || cleanWhitelistedRemitters;
 
     await user.save();
 
@@ -837,7 +883,7 @@ const createTransporter = () => {
 const sendContactMail = async (firstName, lastName, email, phoneNumber, company, subject, message) => {
   try {
     const transporter = createTransporter();
-    
+
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: 'sales@glazia.in',
@@ -886,5 +932,5 @@ const sendContactMail = async (firstName, lastName, email, phoneNumber, company,
   }
 };
 
+module.exports = { createUser, getUser, updateUser, deleteUser, updateUserModuleAccess, createVirtualAccount, createPaySharpVirtualAccount, updateVirtualAccountDetails, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement, uploadInventoryImage, uploadDispatchProofPhotos, getDynamicPricingLabels, mergePricing };
 
-module.exports = { createUser, getUser, updateUser, deleteUser, updateUserModuleAccess,createVirtualAccount,createPaySharpVirtualAccount,updateVirtualAccountDetails, getNalco, getNalcoGraph, updateDynamicPricing, getDynamicPricing, listUsers, sendContactMail, uploadPartnerAgreement,uploadInventoryImage, getDynamicPricingLabels, mergePricing };

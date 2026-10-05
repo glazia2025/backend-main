@@ -9,6 +9,7 @@ const { consumeStock, addStock } = require("../services/dealershipInventoryServi
 const {
   addDeliveredProductsToFabricatorInventory,
 } = require("../services/fabricatorInventoryService");
+const { uploadDispatchProofPhotos } = require("./userController");
 
 const createOrder = require('./paymentController').createOrder;
 
@@ -30,21 +31,23 @@ const getOrders = async (req, res) => {
     if (user && user.role !== "admin") {
       query["user.userId"] = user.userId;
     }
-//     if (user && user.role === "admin") {
-//   query["fulfillment.status"] = "GLAZIA_DIRECT";
-// }
-if (user && user.role === "admin") {
-  const dealershipFabricators = await User.find({
-    accountType: "FABRICATOR",
-    dealership: { $ne: null },
-  }).select("_id");
+    //     if (user && user.role === "admin") {
+    //   query["fulfillment.status"] = "GLAZIA_DIRECT";
+    // }
+    if (user && user.role === "admin") {
+      const dealershipFabricators = await User.find({
+        accountType: "FABRICATOR",
+        dealership: { $ne: null },
+      }).select("_id");
 
-  // Glazia collects all new Paysharp receipts, including dealer-linked fabricators.
-  query.$and = [{ $or: [
-    { paymentProvider: 'PAYSHARP' },
-    { 'user.userId': { $nin: dealershipFabricators.map(fabricator => fabricator._id) } },
-  ] }];
-}
+      // Glazia collects all new Paysharp receipts, including dealer-linked fabricators.
+      query.$and = [{
+        $or: [
+          { paymentProvider: 'PAYSHARP' },
+          { 'user.userId': { $nin: dealershipFabricators.map(fabricator => fabricator._id) } },
+        ]
+      }];
+    }
 
     if (filters.orderType && filters.orderType === "ongoing") {
       query["isComplete"] = false;
@@ -176,20 +179,16 @@ const approvePayment = async (req, res) => {
   }
 
   try {
-    // const order = await UserOrder.findOne({
-    //   _id: orderId,
-    //   "payments._id": paymentId,
-    // });
     const orderQuery = {
-  _id: orderId,
-  "payments._id": paymentId,
-};
+      _id: orderId,
+      "payments._id": paymentId,
+    };
 
-if (req.user?.role !== "admin") {
-  orderQuery.dealership = req.user.userId;
-}
+    if (req.user?.role !== "admin") {
+      orderQuery.dealership = req.user.userId;
+    }
 
-const order = await UserOrder.findOne(orderQuery);
+    const order = await UserOrder.findOne(orderQuery);
 
     if (!order) {
       return res.status(400).json({
@@ -269,20 +268,16 @@ const updatePaymentDueDate = async (req, res) => {
   }
 
   try {
-    // const order = await UserOrder.findOne({
-    //   _id: orderId,
-    //   "payments._id": paymentId,
-    // });
     const orderQuery = {
-  _id: orderId,
-  "payments._id": paymentId,
-};
+      _id: orderId,
+      "payments._id": paymentId,
+    };
 
-if (req.user?.role !== "admin") {
-  orderQuery.dealership = req.user.userId;
-}
+    if (req.user?.role !== "admin") {
+      orderQuery.dealership = req.user.userId;
+    }
 
-const order = await UserOrder.findOne(orderQuery);
+    const order = await UserOrder.findOne(orderQuery);
 
     if (!order) {
       return res.status(400).json({
@@ -328,7 +323,19 @@ const order = await UserOrder.findOne(orderQuery);
 };
 
 const completeOrder = async (req, res) => {
-  const { orderId, biltyDoc, eWayBill, driverInfo, taxInvoice } = req.body;
+  const { orderId, biltyDoc, eWayBill, taxInvoice } = req.body;
+
+  let { driverInfo } = req.body;
+
+  if (typeof driverInfo === "string") {
+    try {
+      driverInfo = JSON.parse(driverInfo);
+    } catch (error) {
+      return res.status(400).json({
+        message: "Invalid driver information.",
+      });
+    }
+  }
 
   if (!orderId || !biltyDoc || !eWayBill || !driverInfo || !taxInvoice) {
     return res
@@ -337,28 +344,52 @@ const completeOrder = async (req, res) => {
   }
 
   try {
-    // const order = await UserOrder.findOne({
-    //   _id: orderId,
-    // });
     const orderQuery = {
-  _id: orderId,
-};
+      _id: orderId,
+    };
 
-if (req.user?.role !== "admin") {
-  orderQuery.dealership = req.user.userId;
-}
+    if (req.user?.role !== "admin") {
+      orderQuery.dealership = req.user.userId;
+    }
 
-const order = await UserOrder.findOne(orderQuery);
+    const order = await UserOrder.findOne(orderQuery);
 
     if (!order) {
       return res.status(400).json({
         message: "Order cannot be found.",
       });
     }
+    const dispatchProofPhotos = req.files || [];
+
+    if (dispatchProofPhotos.length < 1) {
+      return res.status(400).json({
+        message: "At least one dispatch proof photo is required.",
+      });
+    }
+
+    if (dispatchProofPhotos.length > 3) {
+      return res.status(400).json({
+        message: "Maximum 3 dispatch proof photos are allowed.",
+      });
+    }
+
+    const uploadedDispatchProofPhotos =
+      await uploadDispatchProofPhotos(
+        dispatchProofPhotos,
+        order.orderId
+      );
 
     if (order.paymentProvider === 'PAYSHARP') {
       try {
-        const updated = await require('../services/completePaidOrder').completePaidOrder(order._id, req.body);
+        const updated =
+          await require("../services/completePaidOrder").completePaidOrder(
+            order._id,
+            {
+              ...req.body,
+              driverInfo,
+              dispatchProofPhotos: uploadedDispatchProofPhotos,
+            }
+          );
         return res.json({ message: 'Order completed successfully.', order: updated });
       } catch (error) {
         return res.status(error.status || 500).json({ message: error.status ? error.message : 'Unable to complete order' });
@@ -406,25 +437,26 @@ const order = await UserOrder.findOne(orderQuery);
       phone: driverInfo.phone,
     };
     order.taxInvoice = taxInvoice;
+    order.dispatchProofPhotos = uploadedDispatchProofPhotos;
     order.isComplete = true;
     order.completedAt = new Date();
     order.updatedAt = new Date();
 
     // Add delivered products to fabricator inventory
-const fabricator = await User.findOne({
-  _id: order.user.userId,
-  accountType: "FABRICATOR",
-}).select("_id");
+    const fabricator = await User.findOne({
+      _id: order.user.userId,
+      accountType: "FABRICATOR",
+    }).select("_id");
 
-if (fabricator && !order.fabricatorInventoryProcessedAt) {
-  await addDeliveredProductsToFabricatorInventory(
-    fabricator._id,
-    order.products,
-    order._id
-  );
+    if (fabricator && !order.fabricatorInventoryProcessedAt) {
+      await addDeliveredProductsToFabricatorInventory(
+        fabricator._id,
+        order.products,
+        order._id
+      );
 
-  order.fabricatorInventoryProcessedAt = new Date();
-}
+      order.fabricatorInventoryProcessedAt = new Date();
+    }
 
     if (order.inventoryDisposition === "ADD_TO_DEALER_STOCK" && !order.inventoryProcessedAt) {
       await addStock(order.dealership || order.user.userId, order.products, order._id);
