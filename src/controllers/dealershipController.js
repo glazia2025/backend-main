@@ -19,7 +19,7 @@ const listFabricators = async (req, res) => {
     const dealership = await getDealership(req, res);
     if (!dealership) return;
     const fabricators = await User.find({ dealership: dealership._id })
-      .select('name email gstNumber phoneNumber phoneNumbers city state address partnerAgreement createdAt')
+      .select('name email gstNumber phoneNumber city state address partnerAgreement createdAt')
       .sort({ name: 1 });
     res.json({ fabricators });
   } catch (error) {
@@ -39,7 +39,7 @@ const registerFabricator = async (req, res) => {
       return res.status(400).json({ message: 'Partner Agreement acceptance is required' });
     }
     const phoneNumber = String(req.body.phoneNumber).trim();
-    const exists = await User.findOne({ $or: [{ email: req.body.email }, { phoneNumber }, { phoneNumbers: phoneNumber }] });
+    const exists = await User.findOne({ $or: [{ email: req.body.email }, { phoneNumber }, { 'members.phoneNumber': phoneNumber }] });
     if (exists) return res.status(409).json({ message: 'A user with this email or phone number already exists' });
 
     const paUrl = await uploadPartnerAgreement(req.file, phoneNumber);
@@ -54,7 +54,6 @@ const registerFabricator = async (req, res) => {
       authorizedPerson: req.body.authorizedPerson || '',
       authorizedPersonDesignation: req.body.authorizedPersonDesignation || '',
       phoneNumber,
-      phoneNumbers: [phoneNumber],
       accountType: 'FABRICATOR',
       paUrl,
       dealership: dealership._id,

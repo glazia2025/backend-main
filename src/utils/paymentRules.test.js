@@ -47,10 +47,10 @@ test('missing credentials or insecure API base fails closed before network calls
 });
 const { paysharpEnabled, normalizeMobile } = require('./paymentRollout');
 test('rollout false enables every user; true enables only registered allowlisted mobiles', () => {
-  const user = { phoneNumber: '9999999999', phoneNumbers: ['8888888888'] };
+  const user = { phoneNumber: '9999999999' };
   assert.equal(paysharpEnabled(user, { Paysharp_test_active: 'False' }), true);
   assert.equal(paysharpEnabled(user, { Paysharp_test_active: 'True', Paysharp_Test_users: ' +91 99999 99999,7777777777 ' }), true);
-  assert.equal(paysharpEnabled(user, { Paysharp_test_active: 'true', Paysharp_Test_users: '08888888888' }), true);
+  assert.equal(paysharpEnabled(user, { Paysharp_test_active: 'true', Paysharp_Test_users: '08888888888' }), false);
   assert.equal(paysharpEnabled(user, { Paysharp_test_active: 'true', Paysharp_Test_users: '7777777777' }), false);
   assert.equal(paysharpEnabled(user, { Paysharp_test_active: 'true', Paysharp_Test_users: '' }), false);
   assert.equal(paysharpEnabled(user, { Paysharp_test_active: 'typo' }), false);

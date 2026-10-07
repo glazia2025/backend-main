@@ -36,8 +36,8 @@ beforeEach(async () => {
   process.env.Paysharp_test_active = 'false'; process.env.Paysharp_Test_users = '';
   await Promise.all(Object.values(mongoose.models).map(m => m.deleteMany({})));
   await mongoose.models.Counter.create({ name: 'userOrder', seq: 0 });
-  customer = await User.create({ name: 'Fabricator', email: 'fabricator@test.invalid', phoneNumber: '9999999999', phoneNumbers: ['9999999999'], city: 'Pune', paUrl: 'test-fabricator' });
-  token = signJwt({ role: 'user', userId: String(customer._id) });
+  customer = await User.create({ name: 'Fabricator', email: 'fabricator@test.invalid', phoneNumber: '9999999999', city: 'Pune', paUrl: 'test-fabricator' });
+  token = signJwt({ role: 'user', userId: String(customer._id), phoneNumber: customer.phoneNumber });
   await Hardware.create({ id: 1, sapCode: 'HW1', perticular: 'Handle', subCategory: 'Handles', rate: 900, system: 'Pcs', moq: '1' });
   remote = new Map(); calls = [];
   provider.request = async (kind, method, path, body) => {
@@ -169,13 +169,13 @@ test('wrong customer / amount / account confirmations cannot credit an order', a
 test('account and order payment APIs require the owner', async () => {
   const order = await historicalOrder();
   assert.equal((await api(`/api/payments/orders/${order._id}`, undefined, null)).status, 403);
-  const other = await User.create({ name: 'Other', email: 'other@test.invalid', phoneNumber: '8888888888', phoneNumbers: ['8888888888'], city: 'Pune', paUrl: 'other' });
-  const otherToken = signJwt({ role: 'user', userId: String(other._id) });
+  const other = await User.create({ name: 'Other', email: 'other@test.invalid', phoneNumber: '8888888888', city: 'Pune', paUrl: 'other' });
+  const otherToken = signJwt({ role: 'user', userId: String(other._id), phoneNumber: other.phoneNumber });
   assert.equal((await api(`/api/payments/orders/${order._id}`, undefined, otherToken)).status, 404);
   assert.equal((await api(`/api/payments/orders/${order._id}/upi`, {}, otherToken)).status, 404);
 });
 test('dealer stock is consumed only when fully paid; duplicate notifications cannot consume twice', async () => {
-  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
+  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
   await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 10 });
   const order = await historicalOrder(2);
@@ -201,7 +201,7 @@ test('invalid source order cannot leave an orphan upstream order', async () => {
   assert.equal(result.status, 400); assert.equal(await UserOrder.countDocuments(), 0);
 });
 test('inventory-write failure rolls back receipt, payment balance, and stock before retry', async () => {
-  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
+  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
   await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 3 });
   const order = await historicalOrder(); const data = await bank(1180);
@@ -217,13 +217,13 @@ test('inventory-write failure rolls back receipt, payment balance, and stock bef
   assert.equal((await UserOrder.findById(order._id)).paymentStatus, 'PAID');
 });
 test('shortage purchase links once, replenishes dealer inventory and releases original order', async () => {
-  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
+  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
   await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 1 });
   const original = await historicalOrder(3);
   await service.recordReceipt(await bank(3540), 'BANK_TRANSFER');
   assert.equal((await UserOrder.findById(original._id)).fulfillment.remainingProducts[0].quantity, 2);
-  const dealerToken = signJwt({ role: 'user', userId: String(dealer._id) });
+  const dealerToken = signJwt({ role: 'user', userId: String(dealer._id), phoneNumber: dealer.phoneNumber });
   const body = { sourceOrderId: original._id, checkoutKey: 'dealer_shortage_0001', expectedTotalPaise: 236000 };
   const first = await api('/api/user/pi-generate', body, dealerToken);
   assert.equal(first.status, 201, JSON.stringify(first));
@@ -286,7 +286,7 @@ test('manual payment endpoints cannot edit a Paysharp receipt', async () => {
   for (const fn of [legacy.approvePayment, legacy.updatePaymentDueDate, legacy.uploadPaymentProof, legacy.createPayment]) {
     let code = 200;
     const res = { status(value) { code = value; return this; }, json() { return this; } };
-    await fn({ user: { role: 'admin', userId: String(customer._id) }, body: { orderId: order._id, paymentId: saved.payments[0]._id, amount: 1, proof: 'fake', depositedAmount: 1, finalPaymentDueDate: '2027-01-01', dueDate: '2027-01-01' } }, res);
+    await fn({ user: { role: 'admin', userId: String(customer._id), phoneNumber: customer.phoneNumber }, body: { orderId: order._id, paymentId: saved.payments[0]._id, amount: 1, proof: 'fake', depositedAmount: 1, finalPaymentDueDate: '2027-01-01', dueDate: '2027-01-01' } }, res);
     assert.equal(code, 409);
   }
   assert.equal((await UserOrder.findById(order._id)).paidPaise, 118000);
@@ -416,7 +416,7 @@ test('pending, failed, expired and forged success notifications never create an 
 });
 
 test('verified payment creates exactly one paid order under concurrent webhook and refresh retries', async () => {
-  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
+  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
   await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 10 });
   const checkout = await pendingCheckout(2);
@@ -444,7 +444,7 @@ test('verified payment creates exactly one paid order under concurrent webhook a
 });
 
 test('order creation and counter roll back with inventory failure, then verified retry creates the order', async () => {
-  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', phoneNumbers: ['7777777777'], city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
+  const dealer = await User.create({ name: 'Dealer', email: 'dealer@test.invalid', phoneNumber: '7777777777', city: 'Pune', accountType: 'DEALERSHIP', paUrl: 'dealer' });
   await User.updateOne({ _id: customer._id }, { dealership: dealer._id });
   await DealershipInventory.create({ dealership: dealer._id, productId: 'HW1', quantity: 10 });
   const checkout = await pendingCheckout();
@@ -481,8 +481,8 @@ test('wrong amount/customer or unavailable provider cannot finalize a checkout',
 
 test('pending checkout cannot be accessed by another user and survives rollout changes without becoming a legacy order', async () => {
   const checkout = await pendingCheckout();
-  const other = await User.create({ name: 'Other', email: 'other@test.invalid', phoneNumber: '8888888888', phoneNumbers: ['8888888888'], city: 'Pune', paUrl: 'other' });
-  const otherToken = signJwt({ role: 'user', userId: String(other._id) });
+  const other = await User.create({ name: 'Other', email: 'other@test.invalid', phoneNumber: '8888888888', city: 'Pune', paUrl: 'other' });
+  const otherToken = signJwt({ role: 'user', userId: String(other._id), phoneNumber: other.phoneNumber });
   for (const suffix of ['', '/refresh', '/upi']) {
     assert.equal((await api(`/api/payments/orders/${checkout._id}${suffix}`, suffix ? {} : undefined, otherToken)).status, 404);
   }

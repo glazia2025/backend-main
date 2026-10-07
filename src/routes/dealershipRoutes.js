@@ -24,6 +24,13 @@ const inventoryImageUpload = multer({
   },
 });
 router.use(isUser);
+router.use((req, res, next) => {
+  const path = req.path;
+  if (path.startsWith('/fabricators')) return isUser.ownerOnly(req, res, next);
+  if (path.startsWith('/inventory') || path.startsWith('/stock-adjustment-requests')) return isUser.requireModule('inventory')(req, res, next);
+  if (path.startsWith('/orders')) return isUser.requireModule(req.method === 'GET' ? 'orderHistory' : 'orderPlacement')(req, res, next);
+  return next();
+});
 router.get('/fabricators', listFabricators);
 router.post('/fabricators', agreementUpload.single('paPdf'), registerFabricator);
 router.get('/fabricators/:fabricatorId/dynamic-pricing', getFabricatorDynamicPricing);

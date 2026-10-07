@@ -80,7 +80,8 @@ const sendLoginOtp = async (otp, number) => {
 
 
 const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
-const ACCESS_MODULES = ['MAIN_SITE', 'QUOTATION_ERP'];
+const { resolveAccess, permits, publicBusiness } = require('../utils/businessAccess');
+const ACCESS_MODULES = ['MAIN_SITE', 'QUOTATION_ERP', 'SURVEY_APP'];
 const requestedAccessModule = (req) => ACCESS_MODULES.includes(req.body?.accessModule) ? req.body.accessModule : null;
 const moduleDisabledResponse = (res, moduleName) => res.status(403).json({
   message: `Your access to ${moduleName === 'MAIN_SITE' ? 'the Glazia Main Site' : 'Quotation ERP'} has been disabled. Contact Glazia administration.`,
@@ -120,7 +121,7 @@ const sendWhatsAppOTP = async (req, res) => {
   try {
     const accessModule = requestedAccessModule(req);
     if (accessModule) {
-      const user = await User.findOne({ $or: [{ phoneNumber }, { phoneNumbers: phoneNumber }] }).select('disabledModules').lean();
+      const user = await User.findOne({ $or: [{ phoneNumber }, { 'members.phoneNumber': phoneNumber }] }).select('disabledModules').lean();
       if (user?.disabledModules?.includes(accessModule)) return moduleDisabledResponse(res, accessModule);
     }
     const otp = generateOtp();
@@ -144,7 +145,7 @@ const sendAdminOtp = async (req, res) => {
   const phoneNumber = String(req.body.phoneNumber || '').trim();
   if (!/^\d{10}$/.test(phoneNumber)) return res.status(400).json({ message: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE_NUMBER' });
   try {
-    const account = await User.findOne({ $or: [{ phoneNumber }, { phoneNumbers: phoneNumber }] }).select('accountType isActive');
+    const account = await User.findOne({ $or: [{ phoneNumber }, { 'members.phoneNumber': phoneNumber }] }).select('accountType isActive');
     if (!account) return res.status(404).json({ message: 'This mobile number is not registered. Ask a full-access administrator to create an admin account for it.', code: 'ADMIN_NOT_FOUND' });
     if (account.accountType !== 'ADMIN') return res.status(403).json({ message: `This number belongs to a ${account.accountType.toLowerCase()} account and cannot sign in to the admin portal. Use a separate admin account number.`, code: 'NOT_AN_ADMIN' });
     if (account.isActive === false) return res.status(403).json({ message: 'This admin account is disabled. Contact a full-access administrator.', code: 'ADMIN_DISABLED' });
@@ -167,7 +168,7 @@ const verifyAdminOtp = async (req, res) => {
   try {
     const record = await Otp.findOne({ phone: phoneNumber, otp });
     if (!record) return res.status(400).json({ message: 'The OTP is incorrect or has expired. Request a new OTP and try again.', code: 'INVALID_OR_EXPIRED_OTP' });
-    const admin = await User.findOne({ accountType: 'ADMIN', isActive: { $ne: false }, $or: [{ phoneNumber }, { phoneNumbers: phoneNumber }] });
+    const admin = await User.findOne({ accountType: 'ADMIN', isActive: { $ne: false }, $or: [{ phoneNumber }, { 'members.phoneNumber': phoneNumber }] });
     if (!admin) return res.status(403).json({ message: 'This admin account is disabled or no longer exists. Contact a full-access administrator.', code: 'ADMIN_DISABLED' });
     await Otp.deleteOne({ _id: record._id });
     const permissions = admin.adminPermissions || [];
@@ -200,15 +201,17 @@ const verifyOTP = async (req, res) => {
 
     if (record) {
       const existingUser = await User.findOne({
-        $or: [{ phoneNumber }, { phoneNumbers: phoneNumber }],
+        $or: [{ phoneNumber }, { 'members.phoneNumber': phoneNumber }],
       });
 
       if (existingUser) {
         const accessModule = requestedAccessModule(req);
-        if (accessModule && existingUser.disabledModules?.includes(accessModule)) return moduleDisabledResponse(res, accessModule);
+        const access = resolveAccess(existingUser.toObject(), { phoneNumber });
+        if (!access) return res.status(403).json({ message: 'This business membership is inactive.' });
+        if (!permits(access, accessModule || 'MAIN_SITE') || existingUser.disabledModules?.includes(accessModule === 'SURVEY_APP' ? 'QUOTATION_ERP' : accessModule)) return moduleDisabledResponse(res, accessModule);
         await Otp.deleteOne({ phone: phoneNumber });
         const token = signJwt(
-          { phoneNumber, userId: existingUser._id, role: 'user' },
+          { phoneNumber, userId: existingUser._id, memberId: access.memberId, accessModule: accessModule || 'MAIN_SITE', role: 'user' },
           { expiresIn: '120d' }
         );
 
@@ -217,7 +220,7 @@ const verifyOTP = async (req, res) => {
         return res.status(200).json({
           message: 'OTP verified successfully',
           token,
-          existingUser,
+          existingUser: publicBusiness(existingUser, access),
           userExists: true
         });
       }

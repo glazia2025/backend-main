@@ -27,7 +27,7 @@ const inventoryImageUpload = multer({
     );
   },
 });
-router.use(isUser, inventory.requireFabricator);
+router.use(isUser, isUser.requireModule('inventory'), inventory.requireFabricator);
 router.get('/inventory', inventory.listInventory);
 router.post(
   '/inventory',

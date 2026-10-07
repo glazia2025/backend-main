@@ -35,16 +35,21 @@ const quotationPdfUpload = multer({
 
 router.post('/register', upload.single('paPdf'), createUser);
 router.get('/getUser', isUser, getUser);
-router.put('/updateUser', isUser, updateUser);
-router.post('/pi-generate', isUser, express.json({ limit: "50mb" }), require('../controllers/paymentController').createOrder);
-router.post('/add-payment', isUser, express.json({ limit: "50mb" }), createPayment);
-router.get('/getOrders', isUser.withAdminPermission('ORDERS'), getOrders);
+router.put('/updateUser', isUser, isUser.ownerOnly, updateUser);
+const members = require('../controllers/businessMembersController');
+router.get('/members', isUser, isUser.ownerOnly, members.list);
+router.post('/members', isUser, isUser.ownerOnly, members.save);
+router.put('/members/:memberId', isUser, isUser.ownerOnly, members.save);
+router.delete('/members/:memberId', isUser, isUser.ownerOnly, members.save);
+router.post('/pi-generate', isUser, isUser.requireModule('orderPlacement'), express.json({ limit: "50mb" }), require('../controllers/paymentController').createOrder);
+router.post('/add-payment', isUser, isUser.requireModule('orderPlacement'), express.json({ limit: "50mb" }), createPayment);
+router.get('/getOrders', isUser.withAdminPermission('ORDERS'), isUser.requireModule('orderHistory'), getOrders);
 router.get('/get-profile-heirarchy', isUser, getProfileHierarchy);
 router.get('/get-hardware-heirarchy', isUser, getHardwareHeirarchy);
 router.get('/global-search', globalSearch);
-router.post('/send-email', isUser, sendEmail);
-router.post('/share-quotation', isUser, quotationPdfUpload.single('quotationPdf'), shareQuotationOnWhatsApp);
-router.post('/upload-payment-proof', isUser.withAdminPermission('ORDERS'), express.json({ limit: "50mb" }), uploadPaymentProof)
+router.post('/send-email', isUser, isUser.requireModule('orderPlacement'), sendEmail);
+router.post('/share-quotation', isUser, isUser.requireModule('QUOTATION_ERP', 'SURVEY_APP'), quotationPdfUpload.single('quotationPdf'), shareQuotationOnWhatsApp);
+router.post('/upload-payment-proof', isUser.withAdminPermission('ORDERS'), isUser.requireModule('orderPlacement'), express.json({ limit: "50mb" }), uploadPaymentProof)
 router.get('/getProducts', getProducts);
 router.post('/track-phone', trackPhone);
 

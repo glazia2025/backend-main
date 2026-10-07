@@ -16,6 +16,12 @@ const wrap = fn => async (req, res) => {
     res.status(error.status || 500).json({ message: error.status ? error.message : 'Unable to process payment. Please retry.' });
   }
 };
+const visibleAccount = (account, access) => {
+  if (!account) return null;
+  const view = payments.accountView(account);
+  if (!access?.isOwner) delete view.creditPaise;
+  return view;
+};
 const buyer = async req => {
   const user = await User.findOne({ _id: req.user.userId, accountType: { $in: ['FABRICATOR', 'DEALERSHIP'] }, isActive: { $ne: false } }).lean();
   if (!user) throw fail('An active fabricator or dealership account is required', 403);
@@ -48,7 +54,7 @@ exports.account = wrap(async (req, res) => {
   const account = await payments.ensureAccount(user);
 
   res.json({
-    account: payments.accountView(account),
+    account: visibleAccount(account, req.access),
   });
 });
 exports.quote = wrap(async (req, res) => {
@@ -155,7 +161,7 @@ exports.status = wrap(async (req, res) => {
   const account = await PaymentAccount.findOne({ user: req.user.userId });
   const receipts = await PaymentReceipt.find({ 'allocations.order': order._id }).select('reference method utr receivedAt allocations amountPaise').lean();
   const latestAttempt = await PaymentAttempt.findOne({ order: order._id, active: true }).select('status').lean();
-  res.json({ order: order.isCheckout ? null : summary(order), ...(order.isCheckout ? { checkout: summary(order) } : {}), upiStatus: latestAttempt?.status, account: account ? payments.accountView(account) : null,
+  res.json({ order: order.isCheckout ? null : summary(order), ...(order.isCheckout ? { checkout: summary(order) } : {}), upiStatus: latestAttempt?.status, account: visibleAccount(account, req.access),
     receipts: receipts.map(r => ({ reference: r.reference, method: r.method, utr: r.utr, receivedAt: r.receivedAt,
       amountPaise: r.allocations.filter(a => String(a.order) === String(order._id)).reduce((sum, a) => sum + a.amountPaise, 0) })) });
 });

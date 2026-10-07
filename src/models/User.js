@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
+  ...require('./businessMemberFields'),
   paymentRevision: { type: Number, default: 0 },
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
@@ -10,7 +11,6 @@ const userSchema = new mongoose.Schema({
   state: { type: String, default: '' },
   address: { type: String, default: '' },
   phoneNumber: { type: String, required: true, unique: true }, // This is the primary mobile number for login
-  phoneNumbers: { type: [String], default: [] }, // Additional login numbers (includes primary)
   accountType: {
     type: String,
     enum: ['FABRICATOR', 'DEALERSHIP', 'ADMIN'],
@@ -98,7 +98,8 @@ whitelistedRemitters: [{
   }
 }, {timestamps: true });
 
-userSchema.index({ phoneNumbers: 1 }, { unique: true });
+
+userSchema.index({ 'members.phoneNumber': 1 }, { unique: true, partialFilterExpression: { 'members.phoneNumber': { $type: 'string' } } });
 
 const User = mongoose.model('User', userSchema);
 

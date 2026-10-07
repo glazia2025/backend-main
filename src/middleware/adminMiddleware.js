@@ -1,6 +1,7 @@
 const { extractAuthToken } = require('../utils/authCookies');
 const { verifyJwt } = require('../utils/jwt');
 const User = require('../models/User');
+const { resolveAccess, permits } = require('../utils/businessAccess');
 require('dotenv').config();
 
 const isAdmin = async (req, res, next) => {
@@ -107,7 +108,7 @@ const isAdminOrDealership = async (req, res, next) => {
             _id: decoded.userId,
             accountType: 'DEALERSHIP',
             isActive: { $ne: false }
-          }).select('name phoneNumber')
+          }).lean()
         : null;
 
       if (!dealership) {
@@ -116,10 +117,12 @@ const isAdminOrDealership = async (req, res, next) => {
         });
       }
 
-      req.user = {
-        ...decoded,
-        permissions: ['ORDERS']
-      };
+      const access = resolveAccess(dealership, decoded);
+      if (!permits(access, 'orderPlacement') || dealership.disabledModules?.includes('MAIN_SITE')) {
+        return res.status(403).json({ message: 'Order placement permission is required.' });
+      }
+      req.access = access;
+      req.user = { ...decoded, permissions: ['ORDERS'] };
 
       return next();
     }

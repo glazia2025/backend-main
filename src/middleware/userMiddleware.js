@@ -1,6 +1,7 @@
 const { extractAuthToken } = require('../utils/authCookies');
 const { verifyJwt } = require('../utils/jwt');
 const User = require('../models/User');
+const { resolveAccess, permits } = require('../utils/businessAccess');
 require('dotenv').config();
 
 const isUser = async (req, res, next) => {
@@ -20,9 +21,13 @@ const isUser = async (req, res, next) => {
 
 
     if (decoded.role === 'user') {
-      const user = await User.findById(decoded.userId).select('disabledModules').lean();
+      const user = await User.findById(decoded.userId).lean();
       if (!user) return res.status(403).json({ message: 'This user account no longer exists.', code: 'USER_NOT_FOUND' });
-      if (user.disabledModules?.includes('MAIN_SITE')) {
+      const access = resolveAccess(user, decoded);
+      if (!access) return res.status(403).json({ message: 'Your business membership is no longer active. Sign in again.', code: 'MEMBERSHIP_REVOKED' });
+      req.business = user;
+      req.access = access;
+      if (user.disabledModules?.includes('MAIN_SITE') && !req.path.endsWith('/getUser') && !/^\/members(?:\/|$)/.test(req.path)) {
         return res.status(403).json({ message: 'Your access to the Glazia Main Site has been disabled. Contact Glazia administration.', code: 'MODULE_ACCESS_DISABLED', module: 'MAIN_SITE' });
       }
     }
@@ -61,3 +66,11 @@ isUser.withAdminPermission = (permission) => (req, res, next) => {
 };
 
 module.exports = isUser;
+isUser.requireModule = (...modules) => (req, res, next) => {
+  if (req.user?.role === 'admin' || modules.some(module => permits(req.access, module))) return next();
+  return res.status(403).json({ message: 'Your owner has not enabled access to this module.', code: 'MODULE_ACCESS_DISABLED' });
+};
+isUser.ownerOnly = (req, res, next) => {
+  if (req.access?.isOwner) return next();
+  return res.status(403).json({ message: 'Only the business owner can access this feature.' });
+};

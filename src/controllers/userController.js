@@ -10,6 +10,7 @@ const {
 const crypto = require('crypto');
 const path = require('path');
 const User = require('../models/User');
+const { publicBusiness } = require('../utils/businessAccess');
 const HardwareOptions = require('../models/Hardware');
 const Category = require('../models/Profiles/Category');
 const Size = require('../models/Profiles/Size');
@@ -17,41 +18,6 @@ const { Nalco } = require('../models/Order');
 const { AUTH_COOKIE_MAX_AGE_MS, extractAuthToken, setAuthCookie } = require('../utils/authCookies');
 const { signJwt, verifyJwt } = require('../utils/jwt');
 require('dotenv').config();
-
-const normalizePhoneNumbers = (phoneNumbers, phoneNumber) => {
-  const rawNumbers = [];
-  if (Array.isArray(phoneNumbers)) {
-    rawNumbers.push(...phoneNumbers);
-  } else if (typeof phoneNumbers === 'string') {
-    rawNumbers.push(phoneNumbers);
-  }
-  if (phoneNumber) {
-    rawNumbers.push(phoneNumber);
-  }
-
-  const uniqueNumbers = new Set(
-    rawNumbers
-      .map((number) => String(number).trim())
-      .filter((number) => number.length > 0)
-  );
-
-  return Array.from(uniqueNumbers);
-};
-
-const findUserByPhoneNumbers = (phoneNumbers, excludeUserId) => {
-  const query = {
-    $or: [
-      { phoneNumber: { $in: phoneNumbers } },
-      { phoneNumbers: { $in: phoneNumbers } },
-    ],
-  };
-
-  if (excludeUserId) {
-    query._id = { $ne: excludeUserId };
-  }
-
-  return User.findOne(query);
-};
 
 const s3Client = new S3Client({
   region: process.env.AWS_S3_REGION || process.env.AWS_REGION,
@@ -286,23 +252,24 @@ const createUser = async (req, res) => {
     state,
     address,
     phoneNumber,
-    phoneNumbers,
     authorizedPerson,
     authorizedPersonDesignation,
   } = req.body;
 
   console.log(req.body, req.file, 'Request');
 
-  const normalizedPhoneNumbers = normalizePhoneNumbers(phoneNumbers, phoneNumber);
-  const primaryPhoneNumber = normalizedPhoneNumbers[0];
+  const primaryPhoneNumber = String(phoneNumber || '').trim();
 
   if (!primaryPhoneNumber) {
     return res.status(400).json({ message: 'At least one phone number is required' });
   }
+  if (!/^\d{10}$/.test(primaryPhoneNumber)) {
+    return res.status(400).json({ message: 'Use valid 10-digit phone numbers.' });
+  }
 
   // Check if the user already exists
   try {
-    const existingUser = await findUserByPhoneNumbers(normalizedPhoneNumbers);
+    const existingUser = await User.findOne({ $or: [{ phoneNumber: primaryPhoneNumber }, { 'members.phoneNumber': primaryPhoneNumber }] });
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
     }
@@ -328,7 +295,6 @@ const createUser = async (req, res) => {
       state,
       address,
       phoneNumber: primaryPhoneNumber,
-      phoneNumbers: normalizedPhoneNumbers,
       authorizedPerson,
       authorizedPersonDesignation,
       paUrl,
@@ -365,7 +331,7 @@ try {
     // Send the response with the token
     res.status(201).json({
       message: 'User registered successfully',
-      user: newUser,
+      user: publicBusiness(newUser, require('../utils/businessAccess').resolveAccess(newUser.toObject(), { phoneNumber: primaryPhoneNumber })),
       token, // Include the token in the response
     });
   } catch (error) {
@@ -401,7 +367,7 @@ const getUser = async (req, res) => {
       profiles: mergePricing(profileLabels, user.dynamicPricing?.profiles),
     };
 
-    const userResponse = user.toObject();
+    const userResponse = publicBusiness(user, req.access);
     userResponse.dynamicPricing = dynamicPricing;
 
     // Send the user data in the response
@@ -432,7 +398,10 @@ const updateUser = async (req, res) => {
     }
 
     // Update the user's profile fields
-    const { name, email, gstNumber, pincode, city, state, address, phoneNumber, phoneNumbers } = req.body;
+    const { name, email, gstNumber, pincode, city, state, address, phoneNumber } = req.body;
+    if (phoneNumber !== undefined) {
+      return res.status(400).json({ message: 'Manage login numbers through Business Members. The owner login cannot be changed here.' });
+    }
     if (name) user.name = name;
     if (email) user.email = email;
     if (gstNumber) user.gstNumber = gstNumber;
@@ -440,27 +409,6 @@ const updateUser = async (req, res) => {
     if (city) user.city = city;
     if (state) user.state = state;
     if (address) user.address = address;
-
-    let nextPhoneNumbers = null;
-    if (phoneNumbers !== undefined) {
-      nextPhoneNumbers = normalizePhoneNumbers(phoneNumbers, phoneNumber);
-    } else if (phoneNumber) {
-      nextPhoneNumbers = normalizePhoneNumbers([phoneNumber]);
-    }
-
-    if (nextPhoneNumbers) {
-      if (!nextPhoneNumbers.length) {
-        return res.status(400).json({ message: 'At least one phone number is required' });
-      }
-
-      const conflictingUser = await findUserByPhoneNumbers(nextPhoneNumbers, user._id);
-      if (conflictingUser) {
-        return res.status(400).json({ message: 'Phone number already in use' });
-      }
-
-      user.phoneNumbers = nextPhoneNumbers;
-      user.phoneNumber = nextPhoneNumbers[0];
-    }
 
     // Save the updated user data
     await user.save();
@@ -608,7 +556,6 @@ const listUsers = async (req, res) => {
       name: 1,
       email: 1,
       phoneNumber: 1,
-      phoneNumbers: 1,
       city: 1,
       state: 1,
       pincode: 1,

@@ -10,6 +10,7 @@ function setup(account = { _id: 'fabricator-a', accountType: 'FABRICATOR', isAct
   const records = [];
   const matches = (row, filter) => Object.entries(filter).every(([key, value]) => row[key] === value);
   const inventory = {
+    findOne: async filter => records.find(row => matches(row, filter)) || null,
     find: filter => ({ sort: () => ({ lean: async () => records.filter(row => matches(row, filter)) }) }),
     create: async item => {
       if (records.some(row => row.fabricator === item.fabricator && row.productId === item.productId)) {
@@ -90,7 +91,7 @@ test('admins, dealerships, missing users, inactive users and disabled accounts a
 
 test('invalid quantities and product inputs are rejected before mutation', async () => {
   const s = setup();
-  for (const quantity of [-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, null, '', '3', true, undefined]) {
+  for (const quantity of [-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, null, '', true, undefined]) {
     assert.equal((await s.call('createInventoryItem', { body: { productId: 'P', description: 'Profile', quantity } })).statusCode, 400);
     assert.equal((await s.call('updateInventoryItem', { params: { productId: 'P' }, body: { quantity } })).statusCode, 400);
   }

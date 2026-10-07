@@ -12,9 +12,12 @@ exports.createAdminAccount = async (req, res) => {
   try {
     const { name, email, phoneNumber } = req.body;
     if (!name?.trim() || !email?.trim() || !phoneNumber?.trim()) return res.status(400).json({ message: 'Name, email and phone number are required.' });
+    if (await User.exists({ $or: [{ phoneNumber: phoneNumber.trim() }, { 'members.phoneNumber': phoneNumber.trim() }] })) {
+      return res.status(409).json({ message: 'This phone number already belongs to an account.' });
+    }
     const admin = await User.create({
       name: name.trim(), email: email.trim().toLowerCase(), phoneNumber: phoneNumber.trim(),
-      phoneNumbers: [phoneNumber.trim()], accountType: 'ADMIN', adminPermissions: cleanPermissions(req.body.permissions), isActive: true,
+      accountType: 'ADMIN', adminPermissions: cleanPermissions(req.body.permissions), isActive: true,
     });
     return res.status(201).json({ message: 'Admin account created', admin });
   } catch (error) {

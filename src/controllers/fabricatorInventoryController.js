@@ -41,7 +41,7 @@ exports.listInventory = async (req, res) => {
 exports.createInventoryItem = async (req, res) => {
   const { productId, description, quantity: rawQuantity, productType } = req.body || {};
   const quantity =
-    typeof rawQuantity === 'string'
+    typeof rawQuantity === 'string' && rawQuantity.trim() !== ''
       ? Number(rawQuantity)
       : rawQuantity;
 
@@ -111,7 +111,7 @@ exports.updateInventoryItem = async (req, res) => {
   const { quantity: rawQuantity } = req.body || {};
 
   const quantity =
-    typeof rawQuantity === 'string'
+    typeof rawQuantity === 'string' && rawQuantity.trim() !== ''
       ? Number(rawQuantity)
       : rawQuantity;
 

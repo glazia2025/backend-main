@@ -13,11 +13,11 @@ const required = name => {
   const name = required('ADMIN_NAME');
   const email = required('ADMIN_EMAIL').toLowerCase();
   const phoneNumber = required('ADMIN_PHONE');
-  const collision = await User.findOne({ $or: [{ email }, { phoneNumber }, { phoneNumbers: phoneNumber }] });
+  const collision = await User.findOne({ $or: [{ email }, { phoneNumber }, { 'members.phoneNumber': phoneNumber }] });
   if (collision && collision.accountType !== 'ADMIN') throw new Error('That email or phone belongs to a non-admin user. Use an unused phone and email.');
   const admin = await User.findOneAndUpdate(
     { accountType: 'ADMIN', $or: [{ email }, { phoneNumber }] },
-    { $set: { name, email, phoneNumber, phoneNumbers: [phoneNumber], accountType: 'ADMIN', adminPermissions: ['*'], isActive: true } },
+    { $set: { name, email, phoneNumber, accountType: 'ADMIN', adminPermissions: ['*'], isActive: true } },
     { upsert: true, new: true, runValidators: true }
   );
   console.log(`Full-access admin ready: ${admin.name} (${admin.phoneNumber})`);

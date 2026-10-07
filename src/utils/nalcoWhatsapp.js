@@ -21,11 +21,11 @@ const sendNalcoMessageToUsers = async (nalcoPrice) => {
     throw new Error("META_TOKEN and META_NUMID are required for WhatsApp notification");
   }
 
-  const users = await User.find({}, { phoneNumber: 1, phoneNumbers: 1 }).lean();
+  const users = await User.find({}, { phoneNumber: 1 }).lean();
   const recipients = Array.from(
     new Set(
       users
-        .map((user) => user.phoneNumber || user.phoneNumbers?.[0])
+        .map((user) => user.phoneNumber)
         .map(normalizeIndianPhoneNumber)
         .filter(Boolean)
     )

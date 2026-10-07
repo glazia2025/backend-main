@@ -10,9 +10,7 @@ function paysharpEnabled(user, env = process.env) {
   // An invalid flag must not accidentally enable payments for everyone.
   if (flag !== 'true') return false;
   const allowed = new Set(String(env.Paysharp_Test_users || '').split(',').map(normalizeMobile).filter(Boolean));
-  return [user.phoneNumber, ...(user.phoneNumbers || [])].some(number => {
-    const normalized = normalizeMobile(number);
-    return normalized !== null && allowed.has(normalized);
-  });
+  const normalized = normalizeMobile(user.phoneNumber);
+  return normalized !== null && allowed.has(normalized);
 }
 module.exports = { paysharpEnabled, normalizeMobile };
