@@ -17,7 +17,7 @@ Paysharp_Test_users=your_selected_registered_mobile_numbers
 
 Use Paysharp's production root and matching production token for live payments. `PAYSHARP_BASE_URL` takes priority for UPI; the backend appends `/upi/order/intent`, `/upi/order/qrcode`, or `/upi/order/{id}`. Existing `PAYSHARP_UPI_BASE_URL` (including `/upi`) remains a compatibility fallback when the common root is unset. Token values exclude the `Bearer ` prefix. Restart backend-main after changing environment variables.
 
-No VA URL or VA webhook registration is required for this UPI phase. Checkout creates a local ledger, without calling Paysharp's customer/virtual-account APIs. Virtual-account provisioning through the account endpoint is disabled, and both apps hide VA account cards and bank details from Paysharp checkout.
+UPI checkout creates a local ledger without provisioning a virtual account. The bank-transfer option provisions an account separately and requires PAYSHARP_VA_BASE_URL. The account endpoint now enforces the same business test-user list as checkout; excluded businesses receive 403 without a Paysharp API call.
 
 Configure the UPI webhook:
 
@@ -27,7 +27,7 @@ POST https://api.glazia.in/api/payments/webhooks/upi
 
 Send JSON, without incoming authentication. The backend treats the payload as an untrusted lookup hint and independently verifies the order through Paysharp using its server token. It returns HTTP 200 with `{"code":200,"message":"success"}` after verification and durable handling. Verification/database errors return non-200. Customers can also use Check payment status to query Paysharp again.
 
-Historical VA receipt webhook and admin reconciliation handlers remain for previously issued virtual accounts; they require the old `PAYSHARP_VA_BASE_URL` only if those historical payments need processing. They are not called during UPI checkout. Existing high-value Paysharp orders retain their payment provider and display a contact-Glazia message when UPI is unavailable; they are not silently converted to proof orders.
+VA receipt webhook and admin reconciliation handlers require `PAYSHARP_VA_BASE_URL` for bank-transfer processing. They are not called during UPI checkout. Existing high-value Paysharp orders retain their payment provider and display a contact-Glazia message when UPI is unavailable; they are not silently converted to proof orders.
 
 MongoDB must support transactions (replica set or Atlas). Payment indexes initialize before serving traffic. Use separate databases for sandbox and production payment ledgers.
 
@@ -80,7 +80,9 @@ Paysharp_test_active=True
 Paysharp_Test_users=9999999999,8888888888
 ```
 
-`True` restricts new Paysharp UPI checkout to users whose **registered primary or additional mobile** matches the list. Everyone else sees the existing Glazia bank/QR details and uploads payment proof for manual approval. `False` enables Paysharp UPI for all eligible users regardless of the list. Orders of ₹1,00,000 or more (or below the ₹1 UPI minimum) still use proof upload in this phase. Values are case-insensitive. An omitted flag preserves the prior all-user Paysharp behavior; an invalid non-boolean value enables it for nobody. An empty list with `True` means everyone uses proof upload. Indian `+91` and leading-zero formats are normalized; partial numbers never match.
+`True` restricts new Paysharp UPI checkout to users whose **registered business-owner mobile** matches the list. Everyone else sees the existing Glazia bank/QR details and uploads payment proof for manual approval. `False` enables Paysharp UPI for all eligible users regardless of the list. Orders of ₹1,00,000 or more (or below the ₹1 UPI minimum) still use proof upload in this phase. Values are case-insensitive. An omitted flag preserves the prior all-user Paysharp behavior; an invalid non-boolean value enables it for nobody. An empty list with `True` means everyone uses proof upload. Indian `+91` and leading-zero formats are normalized; partial numbers never match.
+
+Member logins use their business owner's registered number for eligibility. Listing only a member number does not enable the business. Existing pending Paysharp checkouts retain their provider to avoid disrupting in-flight payments. Test changes using a new checkout.
 
 Restart the main backend after changing deployment environment variables. No frontend environment variables or phone lists are needed. `GET /api/payments/config` returns only the authenticated account's selected provider, never the allowlist. Both apps use `/api/payments/quote` to obtain server-priced checkout and its selected provider. The server rechecks eligibility when creating an order and rejects stale checkout modes. Proof uploads are required and validated for excluded accounts, without any Paysharp API call. Existing order IDs always retain their original payment method when the switch/list changes; receipt webhooks and existing Paysharp orders remain serviceable.
 

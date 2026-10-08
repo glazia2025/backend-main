@@ -58,6 +58,28 @@ async function api(path, body, auth = token) {
   const response = await fetch(`${base}${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   return { status: response.status, data: await response.json() };
 }
+
+test('comma-separated test users gate quote and virtual-account APIs consistently', async () => {
+  process.env.Paysharp_test_active = 'true';
+  for (const list of ['9999999999,8888888888', '8888888888, +91 99999 99999']) {
+    process.env.Paysharp_Test_users = list;
+    const config = await api('/api/payments/config');
+    assert.equal(config.data.paymentProvider, 'PAYSHARP');
+    assert.equal(config.data.virtualAccountEnabled, true);
+    assert.equal((await api('/api/payments/quote', {products:[{productId:'HW1',quantity:1}]})).data.paymentProvider, 'PAYSHARP');
+    assert.equal((await api('/api/payments/account')).status, 200);
+  }
+  process.env.Paysharp_Test_users = '8888888888,7777777777';
+  const before = calls.length;
+  assert.equal((await api('/api/payments/config')).data.virtualAccountEnabled, false);
+  const quote = await api('/api/payments/quote', {products:[{productId:'HW1',quantity:1}]});
+  assert.equal(quote.data.paymentProvider, 'LEGACY');
+  assert.equal((await api('/api/payments/account')).status, 403);
+  assert.equal(calls.length, before, 'Excluded account requests must not contact Paysharp');
+  const forced = await api('/api/user/pi-generate', {products:[{productId:'HW1',quantity:1}],checkoutKey:'test_list_bypass_001',expectedTotalPaise:quote.data.totalPaise,paymentProvider:'PAYSHARP'});
+  assert.equal(forced.status, 409);
+  assert.equal(await PaymentCheckout.countDocuments(), 0);
+});
 async function pendingCheckout(quantity = 1, key = 'checkout_test_00001') {
   const body = { products: [{ productId: 'HW1', quantity }] };
   const quote = await api('/api/payments/quote', body);

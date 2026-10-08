@@ -41,15 +41,13 @@ const resultBody = result => result.orderSnapshot ? { order: null, checkout: pen
 const summary = order => ({ paymentProvider: order.paymentProvider || 'LEGACY', _id: order._id, orderId: order.orderId, totalPaise: order.totalPaise, paidPaise: order.paidPaise,
   paymentStatus: order.paymentStatus, upiAllowed: upiAllowed(order.totalPaise) && order.totalPaise - order.paidPaise >= 100, isComplete: order.isComplete });
 exports.config = wrap(async (req, res) => {
-  res.json({ paymentProvider: paysharpEnabled(await buyer(req)) ? 'PAYSHARP' : 'LEGACY', virtualAccountEnabled: false });
+  const enabled = paysharpEnabled(await buyer(req));
+  res.json({ paymentProvider: enabled ? 'PAYSHARP' : 'LEGACY', virtualAccountEnabled: enabled });
 });
-// exports.account = wrap(async (req, res) => {
-//   await buyer(req);
-//   throw fail('Virtual-account payments are not available during the UPI-only rollout', 403);
-// });
 
 exports.account = wrap(async (req, res) => {
   const user = await buyer(req);
+  if (!paysharpEnabled(user)) throw fail('Paysharp is not enabled for this business.', 403);
 
   const account = await payments.ensureAccount(user);
 
