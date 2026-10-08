@@ -58,7 +58,20 @@ exports.account = wrap(async (req, res) => {
 exports.quote = wrap(async (req, res) => {
   const user = await buyer(req);
   const pricing = await priceOrder(req.body, user, extractAuthToken(req));
-  res.json({ ...pricing, paymentProvider: upiCheckoutEnabled(user, pricing.totalPaise) ? 'PAYSHARP' : 'LEGACY', upiAllowed: upiAllowed(pricing.totalPaise) });
+  const amountEligible = pricing.totalPaise >= 100 && upiAllowed(pricing.totalPaise);
+  const enabled = paysharpEnabled(user, undefined, decision => {
+    console.info('[Paysharp quote decision]', JSON.stringify({
+      timestamp: new Date().toISOString(),
+      route: 'POST /api/payments/quote',
+      businessId: String(user._id),
+      ...decision,
+      totalPaise: pricing.totalPaise,
+      amountEligible,
+      paymentProvider: decision.rolloutEnabled && amountEligible ? 'PAYSHARP' : 'LEGACY',
+      reason: !decision.rolloutEnabled ? decision.rolloutReason : !amountEligible ? 'AMOUNT_OUTSIDE_UPI_CHECKOUT_RANGE' : decision.rolloutReason,
+    }));
+  });
+  res.json({ ...pricing, paymentProvider: enabled && amountEligible ? 'PAYSHARP' : 'LEGACY', upiAllowed: upiAllowed(pricing.totalPaise) });
 });
 exports.createOrder = wrap(async (req, res) => {
   const user = await buyer(req);

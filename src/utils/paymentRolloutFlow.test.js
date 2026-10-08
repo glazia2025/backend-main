@@ -9,7 +9,8 @@ function setup(phone, env, totalPaise = 118000) {
   let accountCalls = 0;
   const user = { _id: 'business', phoneNumber: phone, accountType: 'FABRICATOR' };
   const payments = { ensureAccount: async () => { accountCalls++; return { creditPaise: 0 }; }, accountView: value => ({...value}) };
-  const context = { exports: {}, console: { error() {} }, require(name) {
+  const logs = [];
+  const context = { exports: {}, console: { error() {}, info(prefix, value) { logs.push(JSON.parse(value)); } }, require(name) {
     if (name === 'crypto') return require('node:crypto');
     if (name === '../models/User') return { findOne: () => ({lean: async () => user}) };
     if (name === '../models/Order') return { UserOrder: {findOne: async () => null} };
@@ -17,12 +18,12 @@ function setup(phone, env, totalPaise = 118000) {
     if (name === '../services/paymentService') return payments;
     if (name === '../services/orderPricingService') return {priceOrder: async () => ({totalPaise})};
     if (name === '../utils/authCookies') return {extractAuthToken: () => 'test'};
-    if (name === '../utils/paymentRollout') return {paysharpEnabled: value => paysharpEnabled(value, env)};
+    if (name === '../utils/paymentRollout') return {paysharpEnabled: (value, unused, onDecision) => paysharpEnabled(value, env, onDecision)};
     if (name === '../utils/paymentRules') return rules;
     return {};
   }};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../controllers/paymentController.js'),'utf8'), context);
-  return { get accountCalls(){return accountCalls;}, async call(handler, body = {}) {
+  return { logs, get accountCalls(){return accountCalls;}, async call(handler, body = {}) {
     const res = {statusCode:200, status(code){this.statusCode=code;return this;}, json(value){this.body=value;return this;}};
     await context.exports[handler]({user:{userId:'business',phoneNumber:'7777777777'},access:{isOwner:false},body},res);
     return res;
@@ -34,6 +35,10 @@ test('listed owner still falls back to legacy checkout outside the current UPI c
     const s = setup('9999999999', limited, totalPaise);
     assert.equal((await s.call('config')).body.paymentProvider, 'PAYSHARP');
     assert.equal((await s.call('quote')).body.paymentProvider, provider, `totalPaise=${totalPaise}`);
+    assert.equal(s.logs[0].paymentProvider, provider);
+    assert.equal(s.logs[0].Paysharp_Test_users, limited.Paysharp_Test_users);
+    assert.equal(s.logs[0].ownerMatchesTestUsers, true);
+    assert.equal(s.logs[0].reason, provider === 'LEGACY' ? 'AMOUNT_OUTSIDE_UPI_CHECKOUT_RANGE' : 'OWNER_LISTED');
   }
 });
 test('first and subsequent comma-separated business numbers enable config, quote and account',async()=>{
@@ -48,6 +53,7 @@ test('unlisted business gets legacy checkout and cannot provision a virtual acco
   const s=setup('7777777777',limited);
   assert.equal((await s.call('config')).body.virtualAccountEnabled,false);
   assert.equal((await s.call('quote')).body.paymentProvider,'LEGACY');
+  assert.equal(s.logs[0].reason, 'OWNER_NOT_LISTED');
   assert.equal((await s.call('account')).statusCode,403);assert.equal(s.accountCalls,0);
   assert.equal((await s.call('createOrder',{checkoutKey:'checkout_test_00001',expectedTotalPaise:118000,paymentProvider:'PAYSHARP'})).statusCode,409);
 });
