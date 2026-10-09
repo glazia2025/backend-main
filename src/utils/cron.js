@@ -1,5 +1,6 @@
 const cron = require("node-cron");
-const { Nalco, NalcoNotification } = require("../models/Order");
+const { Nalco } = require("../models/Order");
+const { NalcoBroadcast } = require("../models/NalcoBroadcast");
 const { downloadPdf } = require("./nalcoPriceFetch");
 const { sendNalcoMessageToUsers } = require("./nalcoWhatsapp");
 require('dotenv').config();
@@ -127,37 +128,62 @@ const getNalcoSlot = (date = new Date()) => {
 const shouldSendDailyWhatsappUpdate = (date = new Date()) =>
   getNalcoSlot(date) === "daily";
 
-// Returns "change" | "daily" | "normal" | null (null = do not send)
+
+const autoId = (dateKey, type) => `auto:${dateKey}:${type}`;
+
+
+const hasManualSendInWindow = async (dateKey) => {
+  const manual = await NalcoBroadcast.findById("manual");
+  if (!manual || manual.state !== "completed" || !(manual.accepted > 0) || !manual.startedAt) {
+    return false;
+  }
+  const start = new Date(`${dateKey}T09:00:00+05:30`);
+  const end = new Date(`${dateKey}T10:00:00+05:30`);
+  return manual.startedAt >= start && manual.startedAt < end;
+};
+
+const getSendState = async (dateKey) => {
+  const [change, daily] = await Promise.all([
+    NalcoBroadcast.findById(autoId(dateKey, "change")),
+    NalcoBroadcast.findById(autoId(dateKey, "daily")),
+  ]);
+  return {
+    changeSent: Boolean(change) || (await hasManualSendInWindow(dateKey)),
+    dailySent: Boolean(daily),
+  };
+};
+
+
 const decideSendType = async (slot, dateKey, priceChanged) => {
   if (slot === "daily") {
-    const record = await NalcoNotification.findOne({ dateKey });
-    if (record?.dailySentAt) return null;                    // regular message already sent
-    if (record?.changeSentAt) return priceChanged ? "normal" : null; // regular skipped; only send if price changed
+    const { changeSent, dailySent } = await getSendState(dateKey);
+    if (dailySent) return null;                                   // regular message already sent
+    if (changeSent) return priceChanged ? "normal" : null;        // regular skipped; send only if price changed
     return "daily";
   }
   if (slot === "quiet") {
     if (!priceChanged) return null;
-    const record = await NalcoNotification.findOne({ dateKey });
-    return record?.dailySentAt ? null : "normal";            // quiet only if the regular message was sent
+    const { dailySent } = await getSendState(dateKey);
+    return dailySent ? null : "normal";                           // quiet hour only after the regular message
   }
   if (priceChanged && slot === "pre-window") return "change";
   if (priceChanged && slot === "normal") return "normal";
   return null;
 };
 
-const markSent = async (type, dateKey) => {
-  const field =
-    type === "change" ? "changeSentAt" : type === "daily" ? "dailySentAt" : null;
-  if (!field) return; // normal sends need no record
-  await NalcoNotification.updateOne(
-    { dateKey },
-    { $set: { [field]: new Date() } },
+const markSent = async (type, dateKey, price, result) => {
+  if (type !== "change" && type !== "daily") return;             
+
+  if (result && typeof result.sent === "number" && result.sent === 0) return;
+  await NalcoBroadcast.updateOne(
+    { _id: autoId(dateKey, type) },
+    { $set: { state: "completed", phase: type, requestedBy: "cron", nalcoPrice: price, finishedAt: new Date() } },
     { upsert: true }
   );
 };
 
 const runJob = async () => {
-  // Fix the time once, so a slow download can't push the run into another slot
+  
   const now = new Date();
   const slot = getNalcoSlot(now);
   const dateKey = getIstDateKey(now);
@@ -174,8 +200,8 @@ const runJob = async () => {
         const sendType = await decideSendType(slot, dateKey, res.changed);
         if (sendType) {
           console.log(`Sending Nalco WhatsApp update (type: ${sendType}, slot: ${slot})`);
-          await sendNalcoMessageToUsers(price);
-          await markSent(sendType, dateKey); // only after a successful send
+          const result = await sendNalcoMessageToUsers(price);
+          await markSent(sendType, dateKey, price, result); // only after the send call succeeds
         } else {
           console.log(`No Nalco WhatsApp update needed (slot: ${slot}, changed: ${res.changed})`);
         }
@@ -188,7 +214,7 @@ const runJob = async () => {
     return;
   }
 
-  // Scrape found no valid price: only the 10:00 regular message falls back to the stored price
+  
   if (slot === "daily") {
     try {
       const sendType = await decideSendType(slot, dateKey, false);
@@ -203,8 +229,8 @@ const runJob = async () => {
         return;
       }
       console.warn(`No valid NALCO price link was found; sending latest database price ${latestPrice} for the scheduled 10:00 AM update.`);
-      await sendNalcoMessageToUsers(latestPrice);
-      await markSent(sendType, dateKey);
+      const result = await sendNalcoMessageToUsers(latestPrice);
+      await markSent(sendType, dateKey, latestPrice, result);
     } catch (error) {
       console.error("Failed to send stored Nalco price for scheduled WhatsApp update:", error.message);
     }

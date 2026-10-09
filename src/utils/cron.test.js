@@ -6,13 +6,19 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, 'cron.js'), 'utf8');
 
+const CHANGE_ID = 'auto:2026-10-08:change';
+const DAILY_ID = 'auto:2026-10-08:daily';
+const manualAt = (iso, accepted = 50) => ({ state: 'completed', accepted, startedAt: new Date(iso) });
+
 const setup = ({
   hour = 10,
   minute = 0,
   scrapedPrice,
   storedPrice = 371650,
-  notification = null,   // e.g. { changeSentAt: new Date() }
+  records = {},      
+  manual = null,    
   sendFails = false,
+  sendResult,       
 } = {}) => {
   const sent = [];
   const marks = [];
@@ -25,9 +31,9 @@ const setup = ({
     sort: async () => (storedPrice ? { nalcoPrice: storedPrice, date: new Date() } : null),
   });
 
-  const NalcoNotification = {
-    findOne: async () => notification,
-    updateOne: async (_filter, update) => { marks.push(Object.keys(update.$set)[0]); },
+  const NalcoBroadcast = {
+    findById: async (id) => (id === 'manual' ? manual : records[id] || null),
+    updateOne: async (_filter, update) => { marks.push(update.$set.phase); },
   };
 
   const module = { exports: {} };
@@ -51,13 +57,15 @@ const setup = ({
     console: { log() {}, warn() {}, error() {} },
     require(name) {
       if (name === 'node-cron') return { schedule() {} };
-      if (name === '../models/Order') return { Nalco, NalcoNotification };
+      if (name === '../models/Order') return { Nalco };
+      if (name === '../models/NalcoBroadcast') return { NalcoBroadcast };
       if (name === './nalcoPriceFetch') return { downloadPdf: async () => scrapedPrice };
       if (name === './nalcoWhatsapp') {
         return {
           sendNalcoMessageToUsers: async (price) => {
             if (sendFails) throw new Error('send failed');
             sent.push(price);
+            return sendResult;
           },
         };
       }
@@ -69,12 +77,12 @@ const setup = ({
   return { runJob: module.exports.runJob, sent, marks };
 };
 
-// ---- existing behaviour ----
+
 test('10 AM job sends the latest database price when scraping finds no price link', async () => {
   const service = setup({ scrapedPrice: undefined, storedPrice: 371650 });
   await service.runJob();
   assert.deepEqual(service.sent, [371650]);
-  assert.deepEqual(service.marks, ['dailySentAt']);
+  assert.deepEqual(service.marks, ['daily']);
 });
 
 test('a scrape failure outside 10 AM does not send a stored price', async () => {
@@ -89,12 +97,12 @@ test('10 AM job sends nothing when neither scraped nor stored price is valid', a
   assert.deepEqual(service.sent, []);
 });
 
-// ---- new rules ----
-test('price change at 9:30 sends and records changeSentAt', async () => {
+
+test('price change at 9:30 sends and records a change message', async () => {
   const service = setup({ hour: 9, minute: 30, scrapedPrice: 371700, storedPrice: 371650 });
   await service.runJob();
   assert.deepEqual(service.sent, [371700]);
-  assert.deepEqual(service.marks, ['changeSentAt']);
+  assert.deepEqual(service.marks, ['change']);
 });
 
 test('no change between 9 and 10 sends nothing', async () => {
@@ -103,36 +111,37 @@ test('no change between 9 and 10 sends nothing', async () => {
   assert.deepEqual(service.sent, []);
 });
 
-test('10:00 daily message is skipped if a change message went out between 9 and 10', async () => {
+test('10:00 regular message is skipped if a change message went out between 9 and 10', async () => {
   const service = setup({
     scrapedPrice: 371650, storedPrice: 371650,
-    notification: { changeSentAt: new Date() },
+    records: { [CHANGE_ID]: {} },
   });
   await service.runJob();
   assert.deepEqual(service.sent, []);
   assert.deepEqual(service.marks, []);
 });
 
-test('10:00 daily message is sent and recorded when no change message went out', async () => {
+test('10:00 regular message is sent and recorded when no change message went out', async () => {
   const service = setup({ scrapedPrice: 371650, storedPrice: 371650 });
   await service.runJob();
   assert.deepEqual(service.sent, [371650]);
-  assert.deepEqual(service.marks, ['dailySentAt']);
+  assert.deepEqual(service.marks, ['daily']);
 });
 
 test('10:00 fallback (scrape failed) is skipped if a change message already went out', async () => {
   const service = setup({
     scrapedPrice: undefined, storedPrice: 371650,
-    notification: { changeSentAt: new Date() },
+    records: { [CHANGE_ID]: {} },
   });
   await service.runJob();
   assert.deepEqual(service.sent, []);
 });
 
+
 test('price change at 10:30 is not sent when the 10:00 regular message was sent', async () => {
   const service = setup({
     hour: 10, minute: 30, scrapedPrice: 371700, storedPrice: 371650,
-    notification: { dailySentAt: new Date() },
+    records: { [DAILY_ID]: {} },
   });
   await service.runJob();
   assert.deepEqual(service.sent, []);
@@ -145,6 +154,31 @@ test('price change at 11:15 is sent', async () => {
   assert.deepEqual(service.marks, []);
 });
 
+test('price change at 10:30 is sent when a change message went out between 9 and 10', async () => {
+  const service = setup({
+    hour: 10, minute: 30, scrapedPrice: 371700, storedPrice: 371650,
+    records: { [CHANGE_ID]: {} },
+  });
+  await service.runJob();
+  assert.deepEqual(service.sent, [371700]);
+});
+
+test('price change at 10:30 is sent when the 10:00 regular message was never sent', async () => {
+  const service = setup({ hour: 10, minute: 30, scrapedPrice: 371700, storedPrice: 371650 });
+  await service.runJob();
+  assert.deepEqual(service.sent, [371700]);
+});
+
+test('price change at exactly 10:00 is sent when a change message already went out between 9 and 10', async () => {
+  const service = setup({
+    hour: 10, minute: 0, scrapedPrice: 371700, storedPrice: 371650,
+    records: { [CHANGE_ID]: {} },
+  });
+  await service.runJob();
+  assert.deepEqual(service.sent, [371700]);
+});
+
+
 test('a failed send does not record anything', async () => {
   const service = setup({
     hour: 9, minute: 30, scrapedPrice: 371700, storedPrice: 371650, sendFails: true,
@@ -154,29 +188,40 @@ test('a failed send does not record anything', async () => {
   assert.deepEqual(service.marks, []);
 });
 
-test('price change at 10:30 is sent when a change message went out between 9 and 10', async () => {
+test('a send where every recipient failed is not recorded', async () => {
   const service = setup({
-    hour: 10, minute: 30, scrapedPrice: 371700, storedPrice: 371650,
-    notification: { changeSentAt: new Date() },
+    hour: 9, minute: 30, scrapedPrice: 371700, storedPrice: 371650,
+    sendResult: { recipients: 3, sent: 0, failed: 3 },
   });
   await service.runJob();
   assert.deepEqual(service.sent, [371700]);
+  assert.deepEqual(service.marks, []);
 });
 
-test('price change at 10:30 is sent when the 10:00 regular message was never sent', async () => {
+
+test('a manual broadcast between 9 and 10 that reached users skips the 10:00 regular message', async () => {
   const service = setup({
-    hour: 10, minute: 30, scrapedPrice: 371700, storedPrice: 371650,
-    notification: null,
+    scrapedPrice: 371650, storedPrice: 371650,
+    manual: manualAt('2026-10-08T09:40:00+05:30'),
   });
   await service.runJob();
-  assert.deepEqual(service.sent, [371700]);
+  assert.deepEqual(service.sent, []);
 });
 
-test('price change at exactly 10:00 is sent when a change message already went out between 9 and 10', async () => {
+test('a manual broadcast where nobody received it does not skip the 10:00 regular message', async () => {
   const service = setup({
-    hour: 10, minute: 0, scrapedPrice: 371700, storedPrice: 371650,
-    notification: { changeSentAt: new Date() },
+    scrapedPrice: 371650, storedPrice: 371650,
+    manual: manualAt('2026-10-08T09:40:00+05:30', 0),
   });
   await service.runJob();
-  assert.deepEqual(service.sent, [371700]);
+  assert.deepEqual(service.sent, [371650]);
+});
+
+test('a manual broadcast from another day does not skip the 10:00 regular message', async () => {
+  const service = setup({
+    scrapedPrice: 371650, storedPrice: 371650,
+    manual: manualAt('2026-10-07T09:40:00+05:30'),
+  });
+  await service.runJob();
+  assert.deepEqual(service.sent, [371650]);
 });

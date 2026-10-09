@@ -134,14 +134,7 @@ const nalcoSchema = new mongoose.Schema({
   date: { type: Date, required: true },
 });
 
-const nalcoNotificationSchema = new mongoose.Schema({
-  dateKey: { type: String, required: true, unique: true }, // IST date like "2026-10-08"
-  changeSentAt: { type: Date, default: null },  // change message sent between 9 and 10
-  dailySentAt: { type: Date, default: null },   // 10:00 regular message sent
-});
-
 const UserOrder = mongoose.model("UserOrder", userOrderSchema);
 const Nalco = mongoose.model("nalco", nalcoSchema);
-const NalcoNotification = mongoose.model("NalcoNotification", nalcoNotificationSchema);
 
-module.exports = { UserOrder, Nalco, NalcoNotification };
+module.exports = { UserOrder, Nalco };
