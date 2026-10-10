@@ -3,7 +3,7 @@ const isUser = require('../middleware/userMiddleware');
 const isAdmin = require('../middleware/adminMiddleware');
 const controller = require('../controllers/paymentController');
 const router = express.Router();
-// Webhook bodies are untrusted. Controllers independently query Paysharp with the server token.
+// UPI verifies with Paysharp. VA currently trusts the payload; sender authentication is pending.
 router.post('/webhooks/upi', controller.upiWebhook);
 router.post('/webhooks/virtual-account', controller.bankWebhook);
 router.post('/reconcile', isAdmin.withPermission('ORDERS'), controller.reconcile);

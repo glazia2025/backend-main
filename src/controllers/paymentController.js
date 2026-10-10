@@ -8,7 +8,7 @@ const { priceOrder } = require('../services/orderPricingService');
 const { extractAuthToken } = require('../utils/authCookies');
 const { paysharpEnabled } = require('../utils/paymentRollout');
 const { consumeStock } = require('../services/dealershipInventoryService');
-const { fail, rupees, upiAllowed } = require('../utils/paymentRules');
+const { fail, paise, rupees, upiAllowed } = require('../utils/paymentRules');
 const wrap = fn => async (req, res) => {
   try { await fn(req, res); }
   catch (error) {
@@ -190,10 +190,24 @@ exports.upiWebhook = wrap(async (req, res) => {
   res.json({ code: 200, message: 'success' });
 });
 exports.bankWebhook = wrap(async (req, res) => {
-  console.log("========== PAYSHARP BANK WEBHOOK HIT ==========");
-  console.log("WEBHOOK BODY:", JSON.stringify(req.body, null, 2));
-  await payments.verifyBank(req.body.paysharpReferenceNo);
-  console.log("========== BANK WEBHOOK PROCESSED ==========");
+  // VA webhook payload is authoritative for now; sender authentication is pending.
+  const data = req.body;
+  if (!data || typeof data.externalCustomerId !== 'string' ||
+      typeof data.virtualAccountNo !== 'string' ||
+      typeof data.paysharpReferenceNo !== 'string' ||
+      !/^[a-zA-Z0-9_-]{1,100}$/.test(data.paysharpReferenceNo) ||
+      typeof data.utrNumber !== 'string' || !data.utrNumber ||
+      !Number.isFinite(Date.parse(data.transactionDate))) {
+    throw fail('Incomplete payment confirmation');
+  }
+  if (data.status !== undefined && data.status !== 'SUCCESS') {
+    throw fail('Payment is not successful');
+  }
+  if (paise(data.amount) <= 0) throw fail('Invalid monetary amount');
+  await payments.recordReceipt(data, 'BANK_TRANSFER');
   res.json({ code: 200, message: 'success' });
 });
-exports.reconcile = exports.bankWebhook;
+exports.reconcile = wrap(async (req, res) => {
+  await payments.verifyBank(req.body.paysharpReferenceNo);
+  res.json({ code: 200, message: 'success' });
+});

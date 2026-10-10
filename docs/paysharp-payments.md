@@ -27,7 +27,7 @@ POST https://api.glazia.in/api/payments/webhooks/upi
 
 Send JSON, without incoming authentication. The backend treats the payload as an untrusted lookup hint and independently verifies the order through Paysharp using its server token. It returns HTTP 200 with `{"code":200,"message":"success"}` after verification and durable handling. Verification/database errors return non-200. Customers can also use Check payment status to query Paysharp again.
 
-VA receipt webhook and admin reconciliation handlers require `PAYSHARP_VA_BASE_URL` for bank-transfer processing. They are not called during UPI checkout. Existing high-value Paysharp orders retain their payment provider and display a contact-Glazia message when UPI is unavailable; they are not silently converted to proof orders.
+The VA receipt webhook accepts transaction details directly from the JSON body without a Paysharp transaction lookup. Sender authentication is pending. It validates required fields and the local customer/VA mapping, then records and allocates the receipt transactionally; repeated references are deduplicated. No status field is required; an explicit status must be SUCCESS. VA provisioning and admin reconciliation still require `PAYSHARP_VA_BASE_URL`; reconciliation independently fetches the transaction from Paysharp. These VA handlers are not called during UPI checkout. Existing high-value Paysharp orders retain their payment provider and display a contact-Glazia message when UPI is unavailable; they are not silently converted to proof orders.
 
 MongoDB must support transactions (replica set or Atlas). Payment indexes initialize before serving traffic. Use separate databases for sandbox and production payment ledgers.
 

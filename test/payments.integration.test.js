@@ -145,14 +145,17 @@ test('orders between ₹50,000 and ₹1,00,000 now allow UPI', async () => {
   assert.equal(order.totalPaise, 5900000);
   assert.equal((await api(`/api/payments/orders/${order._id}/upi`, {})).status, 200);
 });
-test('bank webhook uses provider data, deduplicates concurrent delivery and keeps fees separate', async () => {
-  const order = await historicalOrder(); await bank(1180);
-  const responses = await Promise.all([1, 2, 3].map(() => api('/api/payments/webhooks/virtual-account', { paysharpReferenceNo: 'BANK001', amount: 99999999, externalCustomerId: 'forged' }, null)));
+test('bank webhook trusts payload without provider lookup, deduplicates concurrent delivery and keeps fees separate', async () => {
+  const order = await historicalOrder(); const data = await bank(order.totalPaise / 100);
+  remote.delete('/transactions/BANK001');
+  const before = calls.length;
+  const responses = await Promise.all([1, 2, 3].map(() => api('/api/payments/webhooks/virtual-account', data, null)));
   responses.forEach(response => assert.equal(response.status, 200, JSON.stringify(response)));
+  assert.equal(calls.length, before, 'VA webhook must not call Paysharp');
   const saved = await UserOrder.findById(order._id);
-  assert.equal(saved.paymentStatus, 'PAID'); assert.equal(saved.paidPaise, 118000);
+  assert.equal(saved.paymentStatus, 'PAID'); assert.equal(saved.paidPaise, order.totalPaise);
   assert.equal(saved.payments.length, 1); assert.equal(await PaymentReceipt.countDocuments(), 1);
-  const receipt = await PaymentReceipt.findOne(); assert.equal(receipt.feePaise, 500); assert.equal(receipt.netPaise, 117500);
+  const receipt = await PaymentReceipt.findOne(); assert.equal(receipt.feePaise, 500); assert.equal(receipt.netPaise, order.totalPaise - 500);
 });
 test('partial receipts allocate FIFO and excess credits a future order', async () => {
   const first = await historicalOrder(1, 'checkout_first_0001'); const second = await historicalOrder(1, 'checkout_second_0001');
@@ -185,7 +188,7 @@ test('wrong customer / amount / account confirmations cannot credit an order', a
   remote.set(path, { ...remote.get(path), status: 'SUCCESS', amount: 1, utrNumber: 'WRONG', transactionDate: new Date().toISOString() });
   assert.equal((await api('/api/payments/webhooks/upi', { orderId: String(attempt._id) }, null)).status, 409);
   const data = await bank(1180); remote.set('/transactions/BANK001', { ...data, virtualAccountNo: 'WRONG' });
-  assert.equal((await api('/api/payments/webhooks/virtual-account', { paysharpReferenceNo: 'BANK001' }, null)).status, 409);
+  assert.equal((await api('/api/payments/webhooks/virtual-account', { ...data, virtualAccountNo: 'WRONG' }, null)).status, 409);
   assert.equal(await PaymentReceipt.countDocuments(), 0);
 });
 test('account and order payment APIs require the owner', async () => {
@@ -280,7 +283,12 @@ test('pending or unverifiable notifications do not approve payment', async () =>
   const attempt = await PaymentAttempt.findOne();
   assert.equal((await api('/api/payments/webhooks/upi', { orderId: String(attempt._id), status: 'SUCCESS', amount: 1180 }, null)).status, 200);
   assert.equal((await UserOrder.findById(order._id)).paidPaise, 0);
-  assert.equal((await api('/api/payments/webhooks/virtual-account', { paysharpReferenceNo: 'NONEXISTENT' }, null)).status, 502);
+  assert.equal((await api('/api/payments/webhooks/virtual-account', { paysharpReferenceNo: 'NONEXISTENT' }, null)).status, 400);
+  const data = await bank(1180);
+  const before = calls.length;
+  assert.equal((await api('/api/payments/webhooks/virtual-account', { ...data, status: 'PENDING' }, null)).status, 400);
+  assert.equal((await api('/api/payments/webhooks/virtual-account', { ...data, amount: 0 }, null)).status, 400);
+  assert.equal(calls.length, before);
   assert.equal(await PaymentReceipt.countDocuments(), 0);
 });
 test('quotation checkout fetches authoritative BOM and stores quotation linkage', async () => {
